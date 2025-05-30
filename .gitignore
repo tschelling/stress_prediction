@@ -1,0 +1,7 @@
+*.parquet
+*.zip
+*.png
+*.DS_Store
+*.csv
+*.xlsx
+*.pdf
