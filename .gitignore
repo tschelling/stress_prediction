@@ -6,3 +6,13 @@
 *.xlsx
 *.pdf
 /.vscode
+model_run_artifacts_test3/horizon_1/DecisionTree.joblib
+model_run_artifacts_test3/horizon_1/DummyRegressor.joblib
+model_run_artifacts_test3/horizon_1/ElasticNet.joblib
+model_run_artifacts_test3/horizon_1/FixedEffectsLR.joblib
+model_run_artifacts_test3/horizon_1/Lasso.joblib
+model_run_artifacts_test3/horizon_1/LinearRegression.joblib
+model_run_artifacts_test3/horizon_1/Prophet.joblib
+model_run_artifacts_test3/horizon_1/Ridge.joblib
+model_run_artifacts_test3/horizon_1/VotingEnsemble.joblib
+model_run_artifacts_test3/horizon_1/XGBoost.joblib

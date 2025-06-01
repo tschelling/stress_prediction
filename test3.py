@@ -971,6 +971,13 @@ for horizon_val in FORECAST_HORIZONS: # Changed variable name
         # Store results, ensuring an entry even if model_results is None
         if model_results:
             results_store[horizon_val][model_name_loop] = model_results
+            if SAVE_ARTIFACTS and model_results.get('model_object') is not None:
+                model_path = os.path.join(current_horizon_artifact_dir, f"{model_name_loop}.joblib")
+                try:
+                    joblib.dump(model_results['model_object'], model_path)
+                    print(f"    Saved {model_name_loop} to {model_path}")
+                except Exception as e:
+                    print(f"    Error saving {model_name_loop} model: {e}")
         else:
             results_store[horizon_val][model_name_loop] = {'MAE': np.nan, 'MSE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan, 'RMSE_train': np.nan, 'model_object': None}
 
@@ -982,6 +989,13 @@ for horizon_val in FORECAST_HORIZONS: # Changed variable name
         prophet_results = train_evaluate_prophet(X_train_orig, y_train, X_test_orig, y_test, FEATURE_VARIABLES)
         if prophet_results:
             results_store[horizon_val]['Prophet'] = prophet_results
+            if SAVE_ARTIFACTS and prophet_results.get('model_object') is not None:
+                model_path = os.path.join(current_horizon_artifact_dir, "Prophet.joblib")
+                try:
+                    joblib.dump(prophet_results['model_object'], model_path)
+                    print(f"    Saved Prophet model to {model_path}")
+                except Exception as e:
+                    print(f"    Error saving Prophet model: {e}")
         else: # If Prophet fails or returns None
             results_store[horizon_val]['Prophet'] = {'MAE': np.nan, 'MSE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan, 'RMSE_train': np.nan, 'model_object': None}
 
@@ -991,6 +1005,13 @@ for horizon_val in FORECAST_HORIZONS: # Changed variable name
         ensemble_results = train_evaluate_ensemble(results_store[horizon_val], X_train_scaled_df, y_train, X_test_scaled_df, y_test)
         if ensemble_results:
             results_store[horizon_val]['VotingEnsemble'] = ensemble_results
+            if SAVE_ARTIFACTS and ensemble_results.get('model_object') is not None:
+                model_path = os.path.join(current_horizon_artifact_dir, "VotingEnsemble.joblib")
+                try:
+                    joblib.dump(ensemble_results['model_object'], model_path)
+                    print(f"    Saved VotingEnsemble model to {model_path}")
+                except Exception as e:
+                    print(f"    Error saving VotingEnsemble model: {e}")
         else: # If ensemble fails or returns None
             results_store[horizon_val]['VotingEnsemble'] = {'MAE': np.nan, 'MSE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan, 'RMSE_train': np.nan, 'model_object': None}
     else: # If no base models or no training data for ensemble
