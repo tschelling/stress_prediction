@@ -9,33 +9,35 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # --- 0. Configuration & Helper Functions ---
-TARGET_VARIABLE = 'interest_income_to_assets'
-FEATURE_VARIABLES = ['interest_income_to_assets', 'gdp_qoq', 'deposit_ratio', 'loan_to_asset_ratio', 'log_total_assets', 'cpi_qoq', 'unemployment', 
+TARGET_VARIABLE = 'allowance_for_loan_and_lease_losses_to_assets_qoq'
+FEATURE_VARIABLES = ['gdp_qoq', 'deposit_ratio', 'loan_to_asset_ratio', 'log_total_assets', 'cpi_qoq', 'unemployment', 
                      'household_delinq', 'tbill_3m', 'tbill_10y', 'spread_10y_3m']
 FORECAST_HORIZONS = list(range(1, 2))  # 1 to 8 quarters ahead
 NUMBER_OF_LAGS_TO_INCLUDE = 4
+
 # Test split ratio
 TRAIN_TEST_SPLIT_DIMENSION = 'date'
 TEST_SPLIT_RATIO = 0.2
 N_SPLITS_CV = 3
 
 # Data cut offs
-DATA_BEGIN = '2000-01-01'  # Start date for the data
-DATA_END = '2009-01-01'  # End date for the data
+DATA_BEGIN = None  # Start date for the data
+DATA_END = None  # End date for the data
 
 # Cleaning parameters
-RESTRICT_TO_NUMBER_OF_BANKS = 200  # If a number, restrict to this many banks
+RESTRICT_TO_NUMBER_OF_BANKS = 1000  # If a number, restrict to this many banks
 RESTRICT_TO_BANK_SIZE = None  # If a number, restrict to banks with total assets >= this value
 RESTRICT_TO_MINIMAL_DEPOSIT_RATIO = 0.5 #0.5  # If a number, restrict to banks with deposit ratio >= this value
 RESTRICT_TO_MAX_CHANGE_IN_DEPOSIT_RATIO = 0.1  # If a number, restrict to banks with change in deposit ratio <= this value
 
 # Regression parameters
+INCLUDE_AUTOREGRESSIVE_LAGS = True  # Include autoregressive lags in the regression
 INCLUDE_TIME_FE = False  # Include time features in the regression
-INCLUDE_BANK_FE = False  # Include unit features in the regression, i.e. bank identifiers
+INCLUDE_BANK_FE = True  # Include unit features in the regression, i.e. bank identifiers
 
 # Training parameters
 USE_RANDOM_SEARCH_CV = True # Set to True to use RandomizedSearchCV, False for GridSearchCV
-N_ITER_RANDOM_SEARCH = 50   # Number of parameter settings that are sampled for RandomizedSearchCV
+N_ITER_RANDOM_SEARCH = 30   # Number of parameter settings that are sampled for RandomizedSearchCV
 
 # Artifact Storage
 SAVE_ARTIFACTS = True
@@ -329,20 +331,37 @@ def prepare_data_for_horizon(
     Handles MultiIndex, creates multi-step target, splits data, and scales features.
     """
     if not isinstance(df_full.index, pd.MultiIndex) or \
-       not all(name in df_full.index.names for name in ['id', 'date']):
+       not all(name_idx in df_full.index.names for name_idx in ['id', 'date']): # Renamed 'name' to 'name_idx'
         if 'id' in df_full.columns and 'date' in df_full.columns:
             print("Input DataFrame does not have ('id', 'date') MultiIndex. Setting it now.")
             df_full = df_full.set_index(['id', 'date'])
         else:
             raise ValueError("df_full must have a MultiIndex with 'id' and 'date' levels, "
                              "or 'id' and 'date' columns to set as MultiIndex.")
-    df_full = df_full.sort_index() # Ensure data is sorted by id and then date
-
     df_h = df_full.copy() # Work on a copy
+    df_h = df_h.sort_index() # Ensure data is sorted by id and then date
+
+    # 1. Create AR terms in df_h if configured
+    ar_term_names = []
+    if INCLUDE_AUTOREGRESSIVE_LAGS and NUMBER_OF_LAGS_TO_INCLUDE > 0:
+        for lag_num in range(1, NUMBER_OF_LAGS_TO_INCLUDE + 1):
+            ar_lag_col_name = f'{target_col_name}_ar_lag_{lag_num}'
+            df_h[ar_lag_col_name] = df_h.groupby(level='id', group_keys=False)[target_col_name].shift(lag_num)
+            ar_term_names.append(ar_lag_col_name)
+
+    # 2. Create shifted target for the forecast horizon
     shifted_target_col = f'{target_col_name}_target_h{horizon}'
-    # Group by 'id' to ensure the shift is done within each unit's timeline
     df_h[shifted_target_col] = df_h.groupby(level='id', group_keys=False)[target_col_name].shift(-horizon)
-    df_h.dropna(subset=[shifted_target_col], inplace=True) # Drop NaNs created by shifting
+
+    # 3. Drop NaNs created by shifting target AND by AR terms (if present)
+    cols_to_check_for_na_in_df_h = [shifted_target_col]
+    if ar_term_names: # If any AR terms were created
+        cols_to_check_for_na_in_df_h.extend(ar_term_names)
+    df_h.dropna(subset=cols_to_check_for_na_in_df_h, inplace=True)
+
+    # Ensure ar_term_names only contains columns that still exist in df_h after dropna
+    # (though they should, as they were part of the dropna subset)
+    ar_term_names = [name for name in ar_term_names if name in df_h.columns]
 
     if df_h.empty:
         print(f"DataFrame is empty for horizon {horizon} after creating target. Skipping.")
@@ -353,7 +372,8 @@ def prepare_data_for_horizon(
     # Then create lags separately or in a way that respects this split.
 
     y_full = df_h[shifted_target_col]
-    X_pre_lag_full = df_h[features_list].copy() # Contemporaneous features for now
+    # X_pre_lag_full contains only the original features specified in features_list (from function args)
+    X_pre_lag_full = df_h[features_list].copy() 
 
     if X_pre_lag_full.empty or y_full.empty:
         print(f"X or y is empty for horizon {horizon} before splitting. Skipping.")
@@ -362,7 +382,6 @@ def prepare_data_for_horizon(
     X_train_orig_df, X_test_orig_df, y_train, y_test = None, None, None, None
 
     if train_test_split_dimension == "date":
-        # Use X_for_main_models for splitting decisions, as it's the primary dataset for most models
         unique_dates = X_pre_lag_full.index.get_level_values('date').unique().sort_values()
         if len(unique_dates) < 2: # Need at least two unique dates to split
             print(f"Not enough unique dates to perform a chronological split for horizon {horizon}. Skipping.")
@@ -384,7 +403,6 @@ def prepare_data_for_horizon(
         y_test = y_full[test_mask]
 
     elif train_test_split_dimension == "id":
-        # Use X_for_main_models for splitting decisions
         unique_ids_in_X = X_pre_lag_full.index.get_level_values('id').unique()
         if len(unique_ids_in_X) < 2:
             print(f"Not enough unique IDs ({len(unique_ids_in_X)}) for split by ID (horizon {horizon}). Skipping.")
@@ -414,9 +432,16 @@ def prepare_data_for_horizon(
     else:
         raise ValueError("train_test_split_dimension must be 'date' or 'id'")
 
-    # --- Feature Engineering: Lags (Applied after initial train/test split) ---
-    base_numeric_features = [f for f in features_list if f in X_train_pre_lag.columns and pd.api.types.is_numeric_dtype(X_train_pre_lag[f]) and f != target_col_name]
-    base_categorical_features = [f for f in features_list if f in X_train_pre_lag.columns and f not in base_numeric_features and f != target_col_name]
+    # --- Feature Engineering: Lags for original features (Applied after initial train/test split) ---
+    # X_train_pre_lag and X_test_pre_lag currently contain only original features.
+    # y_train and y_test are aligned with these and with df_h (which might have the AR term).
+    original_numeric_features_for_lags = [
+        f for f in features_list  # Use original features_list here
+        if f in X_train_pre_lag.columns and pd.api.types.is_numeric_dtype(X_train_pre_lag[f]) and f != target_col_name
+    ]
+    original_categorical_features = [
+        f for f in features_list # Use original features_list here
+        if f in X_train_pre_lag.columns and f not in original_numeric_features_for_lags and f != target_col_name    ]
 
     def _add_lags_to_df(df_to_lag, numeric_features_to_lag, num_lags_to_add):
         df_out = df_to_lag.copy()
@@ -430,37 +455,58 @@ def prepare_data_for_horizon(
         return df_out, lagged_feature_names
 
     # Create lags for training data (using only training data history)
-    X_train_with_lags_df, train_lagged_feature_names = _add_lags_to_df(X_train_pre_lag, base_numeric_features, NUMBER_OF_LAGS_TO_INCLUDE)
+    X_train_df_with_orig_lags, train_lagged_feature_names = _add_lags_to_df(
+        X_train_pre_lag, original_numeric_features_for_lags, NUMBER_OF_LAGS_TO_INCLUDE
+    )
     
-    # Create lags for test data
-    # To do this correctly, test data can use contemporaneous values from train data if lags span across the split point.
-    # Concatenate, create lags, then split again.
+    # Create lags for test data (original features)
     if not X_test_pre_lag.empty:
         combined_for_test_lags = pd.concat([X_train_pre_lag, X_test_pre_lag]) # Ensure correct order if not already sorted
         combined_for_test_lags = combined_for_test_lags.sort_index() # Sort by id, then date
         
-        X_combined_with_lags_df, test_lagged_feature_names = _add_lags_to_df(combined_for_test_lags, base_numeric_features, NUMBER_OF_LAGS_TO_INCLUDE)
-        X_test_with_lags_df = X_combined_with_lags_df.loc[X_test_pre_lag.index]
+        X_combined_df_with_orig_lags, test_lagged_feature_names = _add_lags_to_df(
+            combined_for_test_lags, original_numeric_features_for_lags, NUMBER_OF_LAGS_TO_INCLUDE
+        )
+        X_test_df_with_orig_lags = X_combined_df_with_orig_lags.loc[X_test_pre_lag.index]
     else:
-        X_test_with_lags_df = pd.DataFrame(index=X_test_pre_lag.index) # Empty df with same index
+        X_test_df_with_orig_lags = pd.DataFrame(index=X_test_pre_lag.index) # Empty df with same index
         test_lagged_feature_names = [] # Should be same as train_lagged_feature_names if NUMBER_OF_LAGS_TO_INCLUDE is same
 
-    # Define final model features (contemporaneous categorical + lagged numeric OR contemporaneous numeric)
-    actual_model_features = base_categorical_features.copy()
+    # Define final model features based on original features and their lags
+    actual_model_features = original_categorical_features.copy()
     if NUMBER_OF_LAGS_TO_INCLUDE > 0:
         actual_model_features.extend(train_lagged_feature_names) # Use names from train lag creation
     else:
-        actual_model_features.extend(base_numeric_features)
+        actual_model_features.extend(original_numeric_features_for_lags)
 
-    # Select final features and drop NaNs from lagging
-    X_train_main_unscaled = X_train_with_lags_df[actual_model_features].dropna()
+    # Start with dataframes containing original features and their lags
+    X_train_main_unscaled = X_train_df_with_orig_lags[actual_model_features].copy()
+    if not X_test_df_with_orig_lags.empty:
+        X_test_main_unscaled = X_test_df_with_orig_lags[actual_model_features].copy()
+    else:
+        X_test_main_unscaled = pd.DataFrame(columns=actual_model_features, index=X_test_df_with_orig_lags.index)
+
+    # Add the AR terms to X_train_main_unscaled, X_test_main_unscaled, and actual_model_features list
+    if ar_term_names: # If AR terms were successfully created and survived NaN drop
+        for ar_name in ar_term_names:
+            if ar_name not in actual_model_features: # Should already be there if logic is correct
+                actual_model_features.append(ar_name)
+            
+            X_train_main_unscaled[ar_name] = df_h.loc[X_train_main_unscaled.index, ar_name]
+            if not X_test_main_unscaled.empty:
+                X_test_main_unscaled[ar_name] = df_h.loc[X_test_main_unscaled.index, ar_name]
+            elif ar_name in actual_model_features: # If test is empty but AR term is a feature
+                X_test_main_unscaled[ar_name] = pd.Series(dtype=df_h[ar_name].dtype, index=X_test_main_unscaled.index)
+
+    # Drop NaNs that might have been introduced by lagging original features
+    X_train_main_unscaled = X_train_main_unscaled.dropna()
     y_train = y_train.loc[X_train_main_unscaled.index] # Align y_train with X_train after dropna
 
-    if not X_test_with_lags_df.empty:
-        X_test_main_unscaled = X_test_with_lags_df[actual_model_features].dropna() # Use same feature list
+    if not X_test_main_unscaled.empty: # Check X_test_main_unscaled before its own dropna
+        X_test_main_unscaled = X_test_main_unscaled.dropna()
         y_test = y_test.loc[X_test_main_unscaled.index] # Align y_test
     else:
-        X_test_main_unscaled = pd.DataFrame(columns=actual_model_features, index=X_test_with_lags_df.index) # Empty df with correct columns
+        X_test_main_unscaled = pd.DataFrame(columns=actual_model_features, index=X_test_main_unscaled.index) # Empty df with correct columns
 
     # Data for Prophet (uses original contemporaneous features from the split data)
     # Align X_train_prophet_unscaled with the final y_train indices (after lagging and dropna on main X_train)
@@ -886,7 +932,7 @@ def aggregate_and_display_results(results_store: dict, plot_result_charts: bool 
 
 
 
-#region Execute
+#region Execute -------------------------------------------------
 
 # Initialize results store
 
@@ -930,7 +976,28 @@ for horizon_val in FORECAST_HORIZONS: # Changed variable name
         continue # Move to the next horizon
             
     X_train_scaled_df, X_test_scaled_df, y_train, y_test, X_train_orig, X_test_orig = prepared_data
-    
+
+    if SAVE_ARTIFACTS:
+        # Save processed data for this horizon
+        data_artifact_dir = os.path.join(current_horizon_artifact_dir, "data")
+        os.makedirs(data_artifact_dir, exist_ok=True)
+
+        if X_train_scaled_df is not None and not X_train_scaled_df.empty:
+            X_train_scaled_df.to_parquet(os.path.join(data_artifact_dir, "X_train_scaled.parquet"))
+        if X_test_scaled_df is not None and not X_test_scaled_df.empty:
+            X_test_scaled_df.to_parquet(os.path.join(data_artifact_dir, "X_test_scaled.parquet"))
+        if y_train is not None and not y_train.empty:
+            # Ensure y_train has a name, default to TARGET_VARIABLE if not (though it should be shifted_target_col)
+            y_train_name = y_train.name if y_train.name else TARGET_VARIABLE + f"_target_h{horizon_val}_train"
+            y_train.to_frame(name=y_train_name).to_parquet(os.path.join(data_artifact_dir, "y_train.parquet"))
+        if y_test is not None and not y_test.empty:
+            y_test_name = y_test.name if y_test.name else TARGET_VARIABLE + f"_target_h{horizon_val}_test"
+            y_test.to_frame(name=y_test_name).to_parquet(os.path.join(data_artifact_dir, "y_test.parquet"))
+        if X_train_orig is not None and not X_train_orig.empty:
+            X_train_orig.to_parquet(os.path.join(data_artifact_dir, "X_train_orig.parquet"))
+        if X_test_orig is not None and not X_test_orig.empty:
+            X_test_orig.to_parquet(os.path.join(data_artifact_dir, "X_test_orig.parquet"))
+
     # TimeSeriesSplit for cross-validation (if enough data)
     current_n_splits_cv = N_SPLITS_CV
     # TimeSeriesSplit needs at least n_splits + 1 samples for the first training set to be non-empty.
@@ -1020,7 +1087,13 @@ for horizon_val in FORECAST_HORIZONS: # Changed variable name
 
 # --- Aggregate and Display All Results ---
 final_summary_df = aggregate_and_display_results(results_store, plot_result_charts=PLOT_RESULT_CHARTS, print_final_summary=PRINT_FINAL_SUMMARY)
-
+if SAVE_ARTIFACTS:
+    # Save the entire results_store
+    joblib.dump(results_store, os.path.join(ARTIFACTS_BASE_DIR, "results_store.joblib"))
+    print(f"Saved full results_store to {os.path.join(ARTIFACTS_BASE_DIR, 'results_store.joblib')}")
+    if final_summary_df is not None and not final_summary_df.empty:
+        final_summary_df.to_csv(os.path.join(ARTIFACTS_BASE_DIR, "final_summary_metrics.csv"), index=False)
+        print(f"Saved final_summary_df to {os.path.join(ARTIFACTS_BASE_DIR, 'final_summary_metrics.csv')}")
 
 
 
