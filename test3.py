@@ -3,21 +3,19 @@ import pandas as pd
 import numpy as np
 import warnings
 
-
 #region Configure 
 
 warnings.filterwarnings('ignore')
 
 # --- 0. Configuration & Helper Functions ---
-TARGET_VARIABLE = 'allowance_for_loan_and_lease_losses_to_assets_qoq'
+TARGET_VARIABLE = 'interest_income_to_assets'  # Target variable for regression
 FEATURE_VARIABLES = ['gdp_qoq', 'deposit_ratio', 'loan_to_asset_ratio', 'log_total_assets', 'cpi_qoq', 'unemployment', 
-                     'household_delinq', 'tbill_3m', 'tbill_10y', 'spread_10y_3m']
+                     'household_delinq', 'tbill_3m', 'tbill_10y', 'spread_10y_3m', 'sp500_qoq']
 FORECAST_HORIZONS = list(range(1, 2))  # 1 to 8 quarters ahead
-NUMBER_OF_LAGS_TO_INCLUDE = 4
+NUMBER_OF_LAGS_TO_INCLUDE = 8
 
-# Test split ratio
 TRAIN_TEST_SPLIT_DIMENSION = 'date'
-TEST_SPLIT_RATIO = 0.2
+TEST_SPLIT = "2022-01-01" # Can be a float (e.g., 0.2) or a date string (e.g., "2007-12-01")
 N_SPLITS_CV = 3
 
 # Data cut offs
@@ -25,9 +23,9 @@ DATA_BEGIN = None  # Start date for the data
 DATA_END = None  # End date for the data
 
 # Cleaning parameters
-RESTRICT_TO_NUMBER_OF_BANKS = 1000  # If a number, restrict to this many banks
+RESTRICT_TO_NUMBER_OF_BANKS = 200  # If a number, restrict to this many banks
 RESTRICT_TO_BANK_SIZE = None  # If a number, restrict to banks with total assets >= this value
-RESTRICT_TO_MINIMAL_DEPOSIT_RATIO = 0.5 #0.5  # If a number, restrict to banks with deposit ratio >= this value
+RESTRICT_TO_MINIMAL_DEPOSIT_RATIO = None #0.5  # If a number, restrict to banks with deposit ratio >= this value
 RESTRICT_TO_MAX_CHANGE_IN_DEPOSIT_RATIO = 0.1  # If a number, restrict to banks with change in deposit ratio <= this value
 
 # Regression parameters
@@ -43,6 +41,7 @@ N_ITER_RANDOM_SEARCH = 30   # Number of parameter settings that are sampled for 
 SAVE_ARTIFACTS = True
 ARTIFACTS_BASE_DIR = "model_run_artifacts_test3" # Changed to avoid conflict if test4.py also uses this
 
+
 def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10): # Added n_iter
     """Defines models and their hyperparameter grids for GridSearchCV."""
     models = {
@@ -51,10 +50,10 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
         "Lasso": Lasso(random_state=42, max_iter=15000), # Increased max_iter
         "Ridge": Ridge(random_state=42, max_iter=15000), # Increased max_iter
         "ElasticNet": ElasticNet(random_state=42, max_iter=15000), # Increased max_iter
-        "DecisionTree": DecisionTreeRegressor(random_state=42),
-        "XGBoost": XGBRegressor(random_state=42, objective='reg:squarederror', n_jobs=-1,
-                                early_stopping_rounds=None, enable_categorical = True),
-        "FixedEffectsLR": LinearRegression() # Added Fixed Effects Linear Regression
+        "DecisionTree": DecisionTreeRegressor(random_state=42), # enable_categorical for XGBoost is usually for when you pass pd.Categorical types directly
+        "XGBoost": XGBRegressor(random_state=42, objective='reg:squarederror', n_jobs=-1, tree_method='hist', # Default to 'hist' (CPU)
+                                early_stopping_rounds=None, enable_categorical = True), # enable_categorical might be redundant if you OHE everything
+        "FixedEffectsLR": LinearRegression()
     }
     if use_random_search:
         param_grids = {
@@ -72,9 +71,11 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
             "XGBoost": {
                 'n_estimators': randint(10, 151),
                 'learning_rate': uniform(0.01, 0.3 - 0.01),
-                'max_depth': randint(1, 12),
+                'max_depth': randint(3, 12), # Min depth 3 for gpu_hist often better
                 'subsample': uniform(0.6, 1.0 - 0.6),
-                'colsample_bytree': uniform(0.6, 1.0 - 0.6)
+                'colsample_bytree': uniform(0.6, 1.0 - 0.6), # Ensure range is valid (min < max)
+                # Optionally add tree_method to search if you want to compare CPU vs GPU
+                # 'tree_method': ['hist', 'gpu_hist'] # This requires careful handling if gpu_hist is not always available
             }
         }
     else: # Your original GridSearchCV-style grids
@@ -87,9 +88,11 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
             "XGBoost": {
                 'n_estimators': [20, 30, 35, 40, 45, 50, 100],
                 'learning_rate': [0.01, 0.03, 0.05, 0.06, 0.07, 0.08, 0.1, 0.2],
-                'max_depth': [1, 2, 3, 5, 7, 9, 11],
+                'max_depth': [3, 5, 7, 9, 11], # Min depth 3 for gpu_hist
+                # 'tree_method': ['hist', 'gpu_hist'] # Add if you want to explicitly test GPU
             }
         }
+
     return models, param_grids
 
 
@@ -193,14 +196,24 @@ def restrict_sample(df,
 
     if begin_date is not None:
         df_processed = df_processed[df_processed.index.get_level_values('date') >= begin_date]
-        print(f"Filtered to {df_processed.index.get_level_values('date').min()} and later dates.")
+        if not df_processed.empty:
+            print(f"Filtered to {df_processed.index.get_level_values('date').min()} and later dates.")
+        else:
+            print(f"DataFrame became empty after filtering for begin_date: {begin_date}.")
 
     if end_date is not None:
-        df_processed = df_processed[df_processed.index.get_level_values('date') <= end_date]
-        print(f"Filtered to {df_processed.index.get_level_values('date').max()} and earlier dates.")
+        # Only apply end_date filter if df_processed is not already empty
+        if not df_processed.empty:
+            df_processed = df_processed[df_processed.index.get_level_values('date') <= end_date]
+            if not df_processed.empty:
+                print(f"Filtered to {df_processed.index.get_level_values('date').max()} and earlier dates.")
+            else:
+                print(f"DataFrame became empty after filtering for end_date: {end_date}.")
+        # If df_processed was already empty from begin_date filter, no need to do anything here.
+
     if df_processed.empty:
         print("Warning: DataFrame is empty after date filtering. Returning empty DataFrame.")
-        return df_processed.iloc[0:0]
+        return df_processed.iloc[0:0] # Return empty DataFrame with original columns
 
     if max_change_deposit_ratio is not None:
         df_processed['abs_change'] = df_processed.groupby(level='id')['deposit_ratio'].diff().abs().fillna(0)
@@ -316,6 +329,7 @@ import joblib # For saving/loading models
 import os # For creating directories
 from scipy.stats import uniform, randint # For RandomizedSearchCV distributions
 from IPython.display import display # For better display in Jupyter
+from typing import Union # For type hinting
 
 
 def prepare_data_for_horizon(
@@ -324,7 +338,7 @@ def prepare_data_for_horizon(
     features_list: list,
     horizon: int,
     train_test_split_dimension: str,
-    test_ratio: float
+    test_split_config: Union[str, float]
 ) -> tuple:
     """
     Prepares features (X) and target (y) for a given forecast horizon from panel data.
@@ -383,36 +397,61 @@ def prepare_data_for_horizon(
 
     if train_test_split_dimension == "date":
         unique_dates = X_pre_lag_full.index.get_level_values('date').unique().sort_values()
-        if len(unique_dates) < 2: # Need at least two unique dates to split
+        if len(unique_dates) < 2:
             print(f"Not enough unique dates to perform a chronological split for horizon {horizon}. Skipping.")
             return None, None, None, None, None, None
 
-        split_idx = int(len(unique_dates) * (1 - test_ratio))
-        if split_idx == 0 or split_idx >= len(unique_dates): # Avoid empty train or test set by date
-            print(f"Test ratio results in empty train or test set based on unique dates for horizon {horizon}. Skipping.")
+        split_date = None
+        if isinstance(test_split_config, str):
+            try:
+                split_date = pd.to_datetime(test_split_config)
+                # Ensure the chosen split_date allows for both a train and a test set.
+                # Test set starts *after* split_date. Train set includes split_date.
+                if split_date < unique_dates.min() or split_date >= unique_dates.max():
+                    print(f"Warning: TEST_SPLIT date '{test_split_config}' is outside the effective data range "
+                          f"[{unique_dates.min().strftime('%Y-%m-%d')}, {unique_dates.max().strftime('%Y-%m-%d')}] "
+                          f"or does not allow for a non-empty test set. Skipping horizon {horizon}.")
+                    return None, None, None, None, None, None
+                print(f"Using fixed date '{split_date.strftime('%Y-%m-%d')}' for train/test split.")
+            except ValueError:
+                print(f"Error: Invalid date string for TEST_SPLIT: '{test_split_config}'. Skipping horizon {horizon}.")
+                return None, None, None, None, None, None
+        elif isinstance(test_split_config, float) and 0.0 < test_split_config < 1.0:
+            num_test_dates = int(np.ceil(len(unique_dates) * test_split_config))
+            if num_test_dates == 0 : num_test_dates = 1 # Ensure at least one test date if ratio > 0
+            
+            split_idx = len(unique_dates) - num_test_dates
+            if split_idx <= 0 or split_idx >= len(unique_dates): # Ensure train set is not empty and test set is not all data
+                print(f"TEST_SPLIT ratio {test_split_config} results in empty train or test set based on unique dates for horizon {horizon}. Skipping.")
+                return None, None, None, None, None, None
+            split_date = unique_dates[split_idx -1] # Data UP TO this date for train
+            print(f"Using ratio {test_split_config} for train/test split, resulting in split date: {split_date.strftime('%Y-%m-%d')}.")
+        else:
+            print(f"Error: Invalid TEST_SPLIT value: '{test_split_config}'. Must be a date string or a float between 0 and 1. Skipping horizon {horizon}.")
             return None, None, None, None, None, None
-
-        split_date = unique_dates[split_idx -1] # Data UP TO this date for train
 
         train_mask = X_pre_lag_full.index.get_level_values('date') <= split_date
         test_mask = X_pre_lag_full.index.get_level_values('date') > split_date
-
         X_train_pre_lag = X_pre_lag_full[train_mask]
         X_test_pre_lag = X_pre_lag_full[test_mask]
         y_train = y_full[train_mask]
         y_test = y_full[test_mask]
 
     elif train_test_split_dimension == "id":
+        if not (isinstance(test_split_config, float) and 0.0 < test_split_config < 1.0):
+            print(f"Error: For 'id' split, TEST_SPLIT must be a float between 0 and 1. Got: {test_split_config}. Skipping horizon {horizon}.")
+            return None, None, None, None, None, None
+
         unique_ids_in_X = X_pre_lag_full.index.get_level_values('id').unique()
         if len(unique_ids_in_X) < 2:
             print(f"Not enough unique IDs ({len(unique_ids_in_X)}) for split by ID (horizon {horizon}). Skipping.")
             return None, None, None, None, None, None
 
         # Calculate number of test IDs, ensure it's at least 1 if ratio > 0 and less than total
-        num_test_ids = int(np.ceil(len(unique_ids_in_X) * test_ratio))
-        if test_ratio > 0 and num_test_ids == 0: num_test_ids = 1
+        num_test_ids = int(np.ceil(len(unique_ids_in_X) * test_split_config))
+        if test_split_config > 0 and num_test_ids == 0: num_test_ids = 1
         if num_test_ids == 0 or num_test_ids >= len(unique_ids_in_X):
-            print(f"Test ratio ({test_ratio}) for {len(unique_ids_in_X)} IDs results in invalid test set size ({num_test_ids}). Skipping for horizon {horizon}.")
+            print(f"TEST_SPLIT ratio ({test_split_config}) for {len(unique_ids_in_X)} IDs results in invalid test set size ({num_test_ids}). Skipping for horizon {horizon}.")
             return None, None, None, None, None, None
 
         X_pre_lag_reset = X_pre_lag_full.reset_index()
@@ -517,7 +556,7 @@ def prepare_data_for_horizon(
         X_test_prophet_unscaled = pd.DataFrame(columns=features_list, index=X_test_pre_lag.index)
 
     if X_train_main_unscaled.empty or y_train.empty : # Check after all processing for train
-        print(f"Train or test set is empty after split for horizon {horizon}. Check test_ratio and data. Skipping.")
+        print(f"Train set is empty after split for horizon {horizon}. Check TEST_SPLIT and data. Skipping.")
         return None, None, None, None, None, None
 
     # --- Feature Transformation (Scaling for numeric, OHE for categorical) ---
@@ -583,6 +622,11 @@ def train_evaluate_model(model_name_key, model_instance, X_train, y_train, X_tes
     is_xgb = isinstance(model_instance, XGBRegressor)
     fit_params = {}
 
+    # Check for empty X_train or X_train with no features early
+    if X_train.empty or (hasattr(X_train, 'shape') and X_train.shape[1] == 0):
+        print(f"    Skipping {model_name_key}: X_train is empty or has no features.")
+        return {'MAE': np.nan, 'MSE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan, 'RMSE_train': np.nan, 'model_object': model_instance}
+
     # Prepare eval_set for XGBoost if early stopping is active
     # Ensure X_test and y_test are not empty and have consistent lengths
     if is_xgb and hasattr(model_instance, 'early_stopping_rounds') and model_instance.early_stopping_rounds is not None:
@@ -597,7 +641,7 @@ def train_evaluate_model(model_name_key, model_instance, X_train, y_train, X_tes
             print(f"    XGBoost: Skipping eval_set for early stopping due to empty or misaligned X_test/y_test for {model_name_key}")
 
 
-    if param_grid and cv_splitter and not X_train.empty:
+    if param_grid and cv_splitter: # X_train emptiness and feature count already checked
         print(f"    Tuning {model_name_key}...")
         # Check for sufficient samples for CV
         min_samples_for_cv = cv_splitter.get_n_splits() * 2 # Rough estimate, actual min depends on TimeSeriesSplit logic
@@ -610,31 +654,38 @@ def train_evaluate_model(model_name_key, model_instance, X_train, y_train, X_tes
         # Check for constant target variable which can cause issues with some models/solvers in CV
         elif len(np.unique(y_train)) == 1 and model_name_key not in ["DummyRegressor", "DecisionTree", "XGBoost"]: # Some models are fine with constant y
             print(f"    Skipping tuning for {model_name_key}: target variable is constant. Fitting directly.")
+            # For KerasRegressor, we need to pass input_dim if create_mlp_model expects it and it's not a tuned param
             best_model.fit(X_train, y_train)
         else:
             try:
                 if use_random_search:
                     search = RandomizedSearchCV(model_instance, param_distributions=param_grid, 
                                                 n_iter=n_iter_random_search, cv=cv_splitter, 
-                                                scoring='neg_mean_squared_error', n_jobs=-1, random_state=42)
+                                                scoring='neg_mean_squared_error', n_jobs=-1, random_state=42, error_score='raise')
                 else:
                     search = GridSearchCV(model_instance, param_grid, cv=cv_splitter, 
-                                          scoring='neg_mean_squared_error', n_jobs=-1)
-                search.fit(X_train, y_train)
+                                          scoring='neg_mean_squared_error', n_jobs=-1)                
+                
+                # For KerasRegressor, pass fit parameters like epochs, batch_size to search.fit()
+                # These are not part of the model's __init__ but are fit params.
+                # However, KerasRegressor itself takes epochs, batch_size in its __init__.
+                # So, if they are in param_grid, GridSearchCV/RandomizedSearchCV handles them.
+                # If early stopping is desired for NNs, it's more complex with scikit-learn wrappers.
+                # It usually involves Keras Callbacks.
+                
+                search_fit_params = {}
+
+                search.fit(X_train, y_train, **search_fit_params)
                 best_model = search.best_estimator_
                 print(f"    Best params for {model_name_key}: {search.best_params_}")
             except Exception as e:
                 print(f"    Error during GridSearchCV for {model_name_key}: {e}. Fitting with default params.")
                 if is_xgb and fit_params: best_model.fit(X_train, y_train, **fit_params)
-                else: best_model.fit(X_train, y_train)
-    elif not X_train.empty: # Fit directly if no tuning or if X_train is not empty
+                else: best_model.fit(X_train, y_train) # X_train known to be non-empty with features
+    else: # No tuning (param_grid or cv_splitter is None), X_train known to be non-empty with features
         print(f"    Fitting {model_name_key} with default parameters (no tuning).")
         if is_xgb and fit_params: best_model.fit(X_train, y_train, **fit_params)
         else: best_model.fit(X_train, y_train)
-    else: # X_train is empty
-        print(f"    Skipping fitting for {model_name_key} as X_train is empty.")
-        # Return NaNs but keep a model instance if needed (though it's unfitted)
-        return {'MAE': np.nan, 'MSE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan, 'RMSE_train': np.nan, 'model_object': model_instance}
 
 
     if X_test.empty or y_test.empty:
@@ -961,7 +1012,7 @@ for horizon_val in FORECAST_HORIZONS: # Changed variable name
 
     # Prepare data for the current horizon
     prepared_data = prepare_data_for_horizon(
-        all_data, TARGET_VARIABLE, FEATURE_VARIABLES, horizon_val, TRAIN_TEST_SPLIT_DIMENSION, TEST_SPLIT_RATIO
+        all_data, TARGET_VARIABLE, FEATURE_VARIABLES, horizon_val, TRAIN_TEST_SPLIT_DIMENSION, TEST_SPLIT
     )
 
     # If data preparation fails for a horizon, fill with NaNs and continue
@@ -1233,9 +1284,51 @@ import pandas as pd # Ensure pandas is imported
 # 2. `TARGET_VARIABLE` and `FEATURE_VARIABLES` are defined.
 # 3. `X_train_orig`, `X_test_orig`, `y_train`, `y_test`, `X_train_scaled_df`, `X_test_scaled_df`
 #    are correctly set to the data corresponding to HORIZON 1 from your main script.
-# 4. The `preprocess_for_fixed_effects` function is defined in a previous cell or imported.
+#    (Note: This script will now attempt to load H=1 data specifically).
 
 results_h1 = results_store.get(1, {}) # Get results for horizon 1
+
+# Attempt to load Horizon 1 specific data if artifacts were saved
+X_train_scaled_df_h1, X_test_scaled_df_h1, y_train_h1, y_test_h1 = None, None, None, None
+h1_data_loaded_successfully = False
+
+if 1 in FORECAST_HORIZONS: # Check if H1 was even part of the run
+    if SAVE_ARTIFACTS and ARTIFACTS_BASE_DIR:
+        h1_data_dir = os.path.join(ARTIFACTS_BASE_DIR, "horizon_1", "data")
+        required_files = {
+            "X_train": os.path.join(h1_data_dir, "X_train_scaled.parquet"),
+            "X_test": os.path.join(h1_data_dir, "X_test_scaled.parquet"),
+            "y_train": os.path.join(h1_data_dir, "y_train.parquet"),
+            "y_test": os.path.join(h1_data_dir, "y_test.parquet")
+        }
+        if all(os.path.exists(p) for p in required_files.values()):
+            try:
+                X_train_scaled_df_h1 = pd.read_parquet(required_files["X_train"])
+                X_test_scaled_df_h1 = pd.read_parquet(required_files["X_test"])
+                y_train_df_h1 = pd.read_parquet(required_files["y_train"])
+                y_test_df_h1 = pd.read_parquet(required_files["y_test"])
+
+                # y_train/y_test are saved as single-column DataFrames, convert back to Series
+                y_train_h1 = y_train_df_h1[y_train_df_h1.columns[0]]
+                y_test_h1 = y_test_df_h1[y_test_df_h1.columns[0]]
+                h1_data_loaded_successfully = True
+                print("Successfully loaded Horizon 1 data from artifacts for plotting.")
+            except Exception as e:
+                print(f"Error loading Horizon 1 data from artifacts: {e}. Plotting may be affected.")
+        else:
+            print("Warning: Not all Horizon 1 data artifacts found. Plotting may use last horizon's data or fail if it was not H1.")
+
+    if not h1_data_loaded_successfully:
+        # Fallback to global scope variables if H1 was the only/last horizon processed, or if artifacts not available
+        # This relies on the main loop having set these variables appropriately for H1.
+        if 'X_train_scaled_df' in locals() and isinstance(X_train_scaled_df, pd.DataFrame): # Check if globals exist
+            X_train_scaled_df_h1 = X_train_scaled_df
+            X_test_scaled_df_h1 = X_test_scaled_df
+            y_train_h1 = y_train
+            y_test_h1 = y_test
+            print("Using data from last processed iteration for Horizon 1 plotting (fallback).")
+        else:
+            print("Error: Horizon 1 data not available for plotting. Globals not set or artifacts failed.")
 
 models_to_plot = []
 for model_name, metrics in results_h1.items():
@@ -1245,7 +1338,7 @@ for model_name, metrics in results_h1.items():
             models_to_plot.append((model_name, metrics))
 
 if not models_to_plot:
-    print("No suitable models found for horizon 1 to plot.")
+    print("No suitable models found in results_h1 to plot, or H1 data is unavailable.")
 else:
     # Sort models by RMSE for plotting (optional, but can be nice)
     # models_to_plot.sort(key=lambda item: item[1].get('RMSE', float('inf')))
@@ -1259,46 +1352,75 @@ else:
     axes = axes.flatten()
     plot_index = 0
 
+    # Helper function to plot mean and quantiles
+    def plot_aggregated_timeseries(ax, data_series, label_prefix, color, line_style='-'):
+        if data_series is None or data_series.empty:
+            print(f"Skipping {label_prefix} plot: data is empty or None.")
+            return
+        if not isinstance(data_series.index, pd.MultiIndex) or 'date' not in data_series.index.names:
+            print(f"Skipping {label_prefix} plot: data index is not a MultiIndex with 'date'. Index type: {type(data_series.index)}")
+            return
+
+        # Group by date and calculate mean (as 0.5 quantile) and Q1, Q3
+        quantiles_series = data_series.groupby(level='date').quantile([0.25, 0.50, 0.75])
+        if quantiles_series.empty:
+            print(f"Warning: Empty quantiles for {label_prefix}. Skipping plot for it.")
+            return
+
+        quantiles_df = quantiles_series.unstack()
+        if not (0.25 in quantiles_df.columns and 0.50 in quantiles_df.columns and 0.75 in quantiles_df.columns):
+            print(f"Warning: Could not find all quantile columns (0.25, 0.50, 0.75) for {label_prefix}. Columns: {quantiles_df.columns}. Skipping.")
+            return
+
+        dates_idx = quantiles_df.index
+        mean_values = quantiles_df[0.50]
+        q1_values = quantiles_df[0.25]
+        q3_values = quantiles_df[0.75]
+
+        ax.plot(dates_idx, mean_values, label=f'{label_prefix} Mean', color=color, linestyle=line_style)
+        ax.fill_between(dates_idx, q1_values, q3_values, color=color, alpha=0.2, label=f'{label_prefix} IQR')
+
     for model_name, metrics in models_to_plot:
         ax = axes[plot_index]
         model = metrics['model_object']
         mape = metrics.get('MAPE', float('nan'))
 
-        X_train_for_predict = None
-        X_test_for_predict = None
-
-        # All models (including FixedEffectsLR which is now a standard LinearRegression)
-        # use the X_train_scaled_df and X_test_scaled_df from the main loop for Horizon 1.
-        X_train_for_predict = X_train_scaled_df
-        X_test_for_predict = X_test_scaled_df
+        # Initialize prediction series with appropriate empty MultiIndex
+        empty_mi_train = pd.MultiIndex.from_tuples([], names=['id', 'date']) if y_train_h1 is None else y_train_h1.index
+        empty_mi_test = pd.MultiIndex.from_tuples([], names=['id', 'date']) if y_test_h1 is None else y_test_h1.index
         
-        predictions_train = pd.Series(dtype='float64') # Default to empty
-        predictions_test = pd.Series(dtype='float64')  # Default to empty
+        predictions_train_series = pd.Series(dtype='float64', index=empty_mi_train)
+        predictions_test_series = pd.Series(dtype='float64', index=empty_mi_test)
 
-        if X_train_for_predict is not None and not X_train_for_predict.empty:
-            predictions_train = model.predict(X_train_for_predict)
+        if X_train_scaled_df_h1 is not None and not X_train_scaled_df_h1.empty and \
+           y_train_h1 is not None and not y_train_h1.empty:
+            if X_train_scaled_df_h1.shape[1] > 0: # Check for features
+                raw_predictions_train = model.predict(X_train_scaled_df_h1)
+                predictions_train_series = pd.Series(raw_predictions_train, index=y_train_h1.index)
+            else:
+                print(f"Skipping train predictions for {model_name} (H1): X_train_scaled_df_h1 has no features.")
         
-        if X_test_for_predict is not None and not X_test_for_predict.empty:
-            predictions_test = model.predict(X_test_for_predict)
+        if X_test_scaled_df_h1 is not None and not X_test_scaled_df_h1.empty and \
+           y_test_h1 is not None and not y_test_h1.empty:
+            if X_test_scaled_df_h1.shape[1] > 0: # Check for features
+                raw_predictions_test = model.predict(X_test_scaled_df_h1)
+                predictions_test_series = pd.Series(raw_predictions_test, index=y_test_h1.index)
+            else:
+                print(f"Skipping test predictions for {model_name} (H1): X_test_scaled_df_h1 has no features.")
 
-        # Plotting (assumes y_train, y_test are correctly set for Horizon 1)
-        if not y_train.empty:
-            x_train_dates = y_train.index.get_level_values('date')
-            ax.plot(x_train_dates, y_train.values, label='Actual Train', color='blue', marker='.', linestyle='', markersize=3, alpha=0.6)
-            if len(predictions_train) == len(x_train_dates):
-                ax.plot(x_train_dates, predictions_train, label='Predicted Train', color='orange', marker='.', linestyle='', markersize=3, alpha=0.6)
-
-        if not y_test.empty:
-            x_test_dates = y_test.index.get_level_values('date')
-            ax.plot(x_test_dates, y_test.values, label='Actual Test', color='green', marker='.', linestyle='', markersize=3, alpha=0.6)
-            if len(predictions_test) == len(x_test_dates):
-                ax.plot(x_test_dates, predictions_test, label='Predicted Test', color='red', marker='.', linestyle='', markersize=3, alpha=0.6)
+        # Plotting aggregated time series
+        plot_aggregated_timeseries(ax, y_train_h1, 'Actual Train', 'blue')
+        plot_aggregated_timeseries(ax, predictions_train_series, 'Predicted Train', 'orange', line_style='--')
+        plot_aggregated_timeseries(ax, y_test_h1, 'Actual Test', 'green')
+        plot_aggregated_timeseries(ax, predictions_test_series, 'Predicted Test', 'red', line_style='--')
 
         ax.set_title(f'{model_name} (H=1) (MAPE: {mape:.2f}%)', fontsize=10)
         ax.set_xlabel('Date', fontsize=8)
         ax.set_ylabel(TARGET_VARIABLE, fontsize=8)
         
-        if not y_train.empty or not y_test.empty:
+        # Check if any data was plotted to format x-axis
+        if (y_train_h1 is not None and not y_train_h1.empty) or \
+           (y_test_h1 is not None and not y_test_h1.empty):
             ax.xaxis.set_major_formatter(plt.matplotlib.dates.DateFormatter('%Y-%m'))
         ax.tick_params(axis='x', rotation=45, labelsize=7)
         ax.tick_params(axis='y', labelsize=7)
@@ -1312,7 +1434,7 @@ else:
         fig.delaxes(axes[i])
 
     plt.tight_layout(pad=2.0)
-    fig.suptitle("Model Predictions vs Actuals (Horizon 1)", fontsize=16, y=0.995) # Adjusted y for suptitle
+    fig.suptitle("Model Predictions vs Actuals (Horizon 1 - Mean and IQR over Banks)", fontsize=16, y=0.995)
     plt.show()
 #endregion
 
