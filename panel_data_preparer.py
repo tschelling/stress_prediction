@@ -3,10 +3,10 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.model_selection import GroupShuffleSplit
-from typing import Union, Tuple, Optional, List, Dict, Any
+from typing import Any, List, Tuple, Optional, Union # Import necessary types
 
 class PanelDataPreparer:
-    def __init__(self, initial_df: pd.DataFrame, config: Dict[str, Any]):
+    def __init__(self, initial_df: pd.DataFrame, config: dict[str, any]): # Now 'Any' is defined
         self.initial_df = initial_df.copy()
         self.config = config.copy()
 
@@ -18,10 +18,10 @@ class PanelDataPreparer:
         self.include_ar_lags: bool = self.config.get('INCLUDE_AUTOREGRESSIVE_LAGS', True)
         self.num_lags_to_include: int = self.config.get('NUMBER_OF_LAGS_TO_INCLUDE', 0)
 
-        self.train_test_split_dimension: str = self.config['TRAIN_TEST_SPLIT_DIMENSION']
-        self.test_split_config: Union[str, float] = self.config['TEST_SPLIT']
+        self.train_test_split_dimension = self.config['TRAIN_TEST_SPLIT_DIMENSION']
+        self.test_split_config = self.config['TEST_SPLIT']
 
-        self.base_data_for_horizons: Optional[pd.DataFrame] = None
+        self.base_data_for_horizons = None
         self.final_feature_list_for_horizon_processing: List[str] = self.feature_variables_base[:]
 
         self._prepare_initial_data()
@@ -29,7 +29,12 @@ class PanelDataPreparer:
     def _remove_outliers(self, df: pd.DataFrame, target_col: str, threshold: float) -> pd.DataFrame:
         print(f"Removing outliers from the target variable '{target_col}' using z-score threshold {threshold}...")
         nr_rows_before = df.shape[0]
-        z_scores = np.abs((df[target_col] - df[target_col].mean()) / df[target_col].std())
+        # Calculate z-scores, handle potential division by zero if std is 0
+        std_dev = df[target_col].std()
+        if std_dev == 0:
+            print(f"Warning: Standard deviation of '{target_col}' is zero. No outliers removed.")
+            return df.copy()
+        z_scores = np.abs((df[target_col] - df[target_col].mean()) / std_dev)
         df_filtered = df[z_scores < threshold]
         nr_rows_after = df_filtered.shape[0]
         print(f"Observations before outlier removal: {nr_rows_before}, after: {nr_rows_after}. Removed: {nr_rows_before - nr_rows_after}")
@@ -71,15 +76,19 @@ class PanelDataPreparer:
             return df_processed.iloc[0:0]
 
         if max_change_deposit_ratio is not None:
-            df_processed['abs_change_deposit_ratio'] = df_processed.groupby(level='id')['deposit_ratio'].diff().abs().fillna(0)
-            df_processed = df_processed[df_processed['abs_change_deposit_ratio'] <= max_change_deposit_ratio]
-            df_processed = df_processed.drop(columns=['abs_change_deposit_ratio'])
-            print(f"Filtered by max change in deposit ratio (<= {max_change_deposit_ratio}). Rows remaining: {len(df_processed)}")
+            if 'deposit_ratio' not in df_processed.columns:
+                 print("Warning: 'deposit_ratio' column not found. Cannot filter by max_change_deposit_ratio.")
+            else:
+                df_processed['abs_change_deposit_ratio'] = df_processed.groupby(level='id')['deposit_ratio'].diff().abs().fillna(0)
+                df_processed = df_processed[df_processed['abs_change_deposit_ratio'] <= max_change_deposit_ratio]
+                df_processed = df_processed.drop(columns=['abs_change_deposit_ratio'])
+                print(f"Filtered by max change in deposit ratio (<= {max_change_deposit_ratio}). Rows remaining: {len(df_processed)}")
 
         if bank_size_threshold is not None:
             if 'total_assets' not in df_processed.columns:
                 print("Warning: 'total_assets' column not found. Cannot filter by bank_size_threshold.")
             else:
+                # Calculate mean assets only on the currently processed data
                 avg_assets = df_processed.groupby(level='id')['total_assets'].mean()
                 ids_meeting_size_criteria = avg_assets[avg_assets >= bank_size_threshold].index
                 df_processed = df_processed[df_processed.index.get_level_values('id').isin(ids_meeting_size_criteria)]
@@ -89,6 +98,7 @@ class PanelDataPreparer:
             if 'deposit_ratio' not in df_processed.columns:
                 print("Warning: 'deposit_ratio' column not found. Cannot filter by deposit_ratio_threshold.")
             else:
+                # Calculate min deposit ratio only on the currently processed data
                 min_ratios_per_bank = df_processed.groupby(level='id')['deposit_ratio'].min()
                 ids_meeting_deposit_criteria = min_ratios_per_bank[min_ratios_per_bank >= deposit_ratio_threshold].index
                 df_processed = df_processed[df_processed.index.get_level_values('id').isin(ids_meeting_deposit_criteria)]
@@ -100,6 +110,7 @@ class PanelDataPreparer:
             else:
                 current_bank_ids = df_processed.index.get_level_values('id').unique()
                 if len(current_bank_ids) > number_of_banks:
+                    # Use a fixed random state for reproducibility
                     sampled_ids = pd.Series(current_bank_ids).sample(n=number_of_banks, random_state=42, replace=False).values
                     df_processed = df_processed[df_processed.index.get_level_values('id').isin(sampled_ids)]
                     print(f"Randomly selected {df_processed.index.get_level_values('id').nunique()} banks.")
@@ -112,13 +123,18 @@ class PanelDataPreparer:
         return df_processed
 
     def _prepare_initial_data(self):
-        df = self.initial_df
+        df = self.initial_df.copy() # Work on a copy to avoid modifying the original initial_df
         print(f"\n--- Preparing Initial Data ---")
         print(f"Initial raw data shape: {df.shape}")
 
         current_feature_list = self.feature_variables_base[:]
 
         if self.include_time_fe:
+            # Ensure 'date' is datetime type for quarter/year extraction
+            if not pd.api.types.is_datetime64_any_dtype(df.index.get_level_values('date')):
+                 df.index = df.index.set_levels(pd.to_datetime(df.index.get_level_values('date')), level='date')
+                 print("Converted 'date' index level to datetime.")
+
             df['quarter'] = 'quarter_' + df.index.get_level_values('date').quarter.astype(str)
             df['year'] = 'year_' + df.index.get_level_values('date').year.astype(str)
             if 'quarter' not in current_feature_list: current_feature_list.append('quarter')
@@ -126,38 +142,49 @@ class PanelDataPreparer:
             print("Added time fixed effects: 'quarter', 'year'.")
 
         if self.include_bank_fe:
-            df['bank_id'] = 'bank_id_' + df.index.get_level_values('id').astype('category').codes.astype(str)
+            # Use a list comprehension for robust string concatenation.
+            # This avoids potential UFuncTypeErrors with NumPy string dtypes.
+            df['bank_id'] = ['bank_id_' + str(bank_id) for bank_id in df.index.get_level_values('id')]
+
             if 'bank_id' not in current_feature_list:
                 current_feature_list = ['bank_id'] + current_feature_list # Prepend
             print("Added bank fixed effect: 'bank_id'.")
         
         self.final_feature_list_for_horizon_processing = current_feature_list
 
-        cols_for_dropna = self.final_feature_list_for_horizon_processing + [self.target_variable]
-        # Ensure all columns for dropna actually exist in df
-        cols_for_dropna = [col for col in cols_for_dropna if col in df.columns]
+        # Ensure all columns for dropna actually exist in df before subsetting
+        cols_for_dropna = [col for col in self.final_feature_list_for_horizon_processing + [self.target_variable] if col in df.columns]
         
-        print(f"Dropping NaNs based on subset: {cols_for_dropna}")
-        rows_before_na_drop = len(df)
-        df = df.dropna(subset=cols_for_dropna).copy()
-        print(f"Rows before NaN drop: {rows_before_na_drop}, after: {len(df)}. Removed: {rows_before_na_drop - len(df)}")
+        if not cols_for_dropna:
+             print("Warning: No valid columns found for initial NaN drop. Skipping initial NaN drop.")
+        else:
+            print(f"Dropping NaNs based on subset: {cols_for_dropna}")
+            rows_before_na_drop = len(df)
+            df = df.dropna(subset=cols_for_dropna).copy()
+            print(f"Rows before NaN drop: {rows_before_na_drop}, after: {len(df)}. Removed: {rows_before_na_drop - len(df)}")
 
-        df = self._remove_outliers(df, self.target_variable, threshold=self.config.get('OUTLIER_THRESHOLD_TARGET', 3.0))
-        df = self._remove_banks_with_few_observations(df, min_observations=self.config.get('MIN_OBS_PER_BANK', 10))
-        
-        df = self._restrict_sample_logic(df)
+        if not df.empty:
+            df = self._remove_outliers(df, self.target_variable, threshold=self.config.get('OUTLIER_THRESHOLD_TARGET', 3.0))
+            if not df.empty:
+                 df = self._remove_banks_with_few_observations(df, min_observations=self.config.get('MIN_OBS_PER_BANK', 10))
+            else:
+                 print("DataFrame became empty after outlier removal. Skipping bank observation removal.")
+        else:
+            print("DataFrame is empty after initial NaN drop. Skipping outlier and bank observation removal.")
+
+        if not df.empty:
+             df = self._restrict_sample_logic(df)
+        else:
+            print("DataFrame is empty before sample restriction. Skipping sample restriction.")
         
         self.base_data_for_horizons = df.copy()
         print(f"Base data prepared. Shape: {self.base_data_for_horizons.shape}")
         print(f"Final features for horizon processing: {self.final_feature_list_for_horizon_processing}")
 
-    def get_horizon_specific_data(self, horizon: int) -> Tuple[
-        Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[pd.Series], Optional[pd.Series],
-        Optional[pd.DataFrame], Optional[pd.DataFrame]
-    ]:
+    def _prepare_data_with_lags_and_target(self, horizon: int) -> Tuple[Optional[pd.DataFrame], Optional[List[str]], Optional[str]]:
         if self.base_data_for_horizons is None or self.base_data_for_horizons.empty:
             print(f"Base data is not prepared or is empty. Cannot generate data for horizon {horizon}.")
-            return None, None, None, None, None, None
+            return None, None, None # Corrected to return three None values
 
         df_h = self.base_data_for_horizons.copy()
         df_h = df_h.sort_index()
@@ -166,184 +193,391 @@ class PanelDataPreparer:
         if self.include_ar_lags and self.num_lags_to_include > 0:
             for lag_num in range(1, self.num_lags_to_include + 1):
                 ar_lag_col_name = f'{self.target_variable}_ar_lag_{lag_num}'
-                df_h[ar_lag_col_name] = df_h.groupby(level='id', group_keys=False)[self.target_variable].shift(lag_num)
-                ar_term_names.append(ar_lag_col_name)
+                # Ensure target variable exists before trying to shift
+                # This check is redundant if _prepare_initial_data ensures target exists, but kept for safety
+                if self.target_variable in df_h.columns:
+                    # Use group_keys=False to prevent adding group keys to the index
+                    df_h[ar_lag_col_name] = df_h.groupby(level='id', group_keys=False)[self.target_variable].shift(lag_num)
+                    ar_term_names.append(ar_lag_col_name)
+                else:
+                    print(f"Warning: Target variable '{self.target_variable}' not found in base data. Cannot create AR lags.")
+                    # If target is missing, we cannot create any AR lags, so return the original df and empty list
+                    return df_h, [], "" # Return df_h, empty ar_term_names, empty shifted_target_col
 
+        # Ensure target variable exists before trying to shift (redundant check, but safe)
+        # Call _add_shifted_target to actually perform the shift and get the column name
+        df_h, shifted_target_col = self._add_shifted_target(df_h, horizon)
+        if not shifted_target_col: # If _add_shifted_target failed (e.g., target missing)
+            print(f"Failed to add shifted target for horizon {horizon}.")
+            return df_h, ar_term_names, "" # Return current df_h, ar_terms, and empty shifted_target_col
+
+        return df_h, ar_term_names, shifted_target_col
+    def _add_shifted_target(self, df_h: pd.DataFrame, horizon: int) -> Tuple[pd.DataFrame, str]:
+        """Adds the shifted target variable for the given horizon."""
         shifted_target_col = f'{self.target_variable}_target_h{horizon}'
-        df_h[shifted_target_col] = df_h.groupby(level='id', group_keys=False)[self.target_variable].shift(-horizon)
+        # Ensure target variable exists before trying to shift
+        if self.target_variable in df_h.columns:
+             # Use group_keys=False to prevent adding group keys to the index
+             df_h[shifted_target_col] = df_h.groupby(level='id', group_keys=False)[self.target_variable].shift(-horizon)
+        else:
+             print(f"Warning: Target variable '{self.target_variable}' not found in base data. Cannot create shifted target.")
+             # Return original df and an empty string if target is missing
+             return df_h, ""
 
-        cols_to_check_for_na = [shifted_target_col] + ar_term_names
-        df_h.dropna(subset=cols_to_check_for_na, inplace=True)
-        
-        ar_term_names = [name for name in ar_term_names if name in df_h.columns] # Re-validate after dropna
+        return df_h, shifted_target_col
 
-        if df_h.empty:
-            print(f"DataFrame empty for H{horizon} after target/AR shift & NaN drop. Skipping.")
-            return None, None, None, None, None, None
-        
-        y_full = df_h[shifted_target_col]
-        
-        # Features for Prophet are the original ones (before lagging main features)
-        # self.final_feature_list_for_horizon_processing includes bank_id, quarter, year if configured
-        prophet_feature_list = [f for f in self.final_feature_list_for_horizon_processing if f in df_h.columns]
-        X_pre_lag_full = df_h[prophet_feature_list].copy()
+    def _drop_nans_after_shifting_lagging(self, df_h: pd.DataFrame, shifted_target_col: str, ar_term_names: List[str]) -> pd.DataFrame:
+        """Drops rows with NaNs introduced by shifting the target or adding AR lags."""
+        cols_to_check_for_na = []
+        if shifted_target_col and shifted_target_col in df_h.columns:
+            cols_to_check_for_na.append(shifted_target_col)
+        cols_to_check_for_na.extend([name for name in ar_term_names if name in df_h.columns])
 
-        if X_pre_lag_full.empty or y_full.empty:
-            print(f"X_pre_lag_full or y_full empty for H{horizon} before split. Skipping.")
-            return None, None, None, None, None, None
+        if not cols_to_check_for_na:
+             print(f"Warning: No valid columns found for NaN drop after shifting/lagging. Skipping dropna.")
+             return df_h.copy()
+        else:
+            print(f"Dropping NaNs based on subset: {cols_to_check_for_na}")
+            rows_before_na_drop = len(df_h)
+            df_h_filtered = df_h.dropna(subset=cols_to_check_for_na).copy()
+            print(f"Rows before NaN drop: {rows_before_na_drop}, after: {len(df_h_filtered)}. Removed: {rows_before_na_drop - len(df_h_filtered)}")
+            return df_h_filtered
 
-        # --- Train/Test Split ---
-        X_train_pre_lag, X_test_pre_lag, y_train, y_test = None, None, None, None
-        # (Split logic from test3.py's prepare_data_for_horizon, adapted to use self.config)
+    def _perform_train_test_split(self, X_full: pd.DataFrame, y_full: pd.Series) -> Tuple[
+        Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[pd.Series], Optional[pd.Series]
+    ]:
+        """Performs the train/test split based on configuration."""
+        X_train, X_test, y_train, y_test = None, None, None, None
+
+        if X_full.empty or y_full.empty or len(X_full) != len(y_full):
+            print("Cannot perform train/test split: Input data is empty or mismatched.")
+            return None, None, None, None
+
         if self.train_test_split_dimension == "date":
-            unique_dates = X_pre_lag_full.index.get_level_values('date').unique().sort_values()
-            if len(unique_dates) < 2: return None, None, None, None, None, None # Not enough dates
+            unique_dates = X_full.index.get_level_values('date').unique().sort_values()
+            if len(unique_dates) < 2:
+                print(f"Not enough unique dates ({len(unique_dates)}) for date split. Skipping.")
+                return None, None, None, None
+
             split_date_val: Optional[pd.Timestamp] = None
             if isinstance(self.test_split_config, str):
-                try: split_date_val = pd.to_datetime(self.test_split_config)
-                except ValueError: return None, None, None, None, None, None # Invalid date string
-                if split_date_val < unique_dates.min() or split_date_val >= unique_dates.max(): return None, None, None, None, None, None
+                try:
+                    split_date_val = pd.to_datetime(self.test_split_config)
+                    if split_date_val < unique_dates.min() or split_date_val >= unique_dates.max():
+                         print(f"Split date '{self.test_split_config}' is outside the data range. Skipping.")
+                         return None, None, None, None
+                except ValueError:
+                    print(f"Invalid date string '{self.test_split_config}' for date split config. Skipping.")
+                    return None, None, None, None
             elif isinstance(self.test_split_config, float) and 0.0 < self.test_split_config < 1.0:
                 num_test_dates = int(np.ceil(len(unique_dates) * self.test_split_config))
                 if num_test_dates == 0: num_test_dates = 1
                 split_idx = len(unique_dates) - num_test_dates
-                if split_idx <= 0 or split_idx >= len(unique_dates): return None, None, None, None, None, None
-                split_date_val = unique_dates[split_idx -1]
-            else: return None, None, None, None, None, None # Invalid split config
-            
-            train_mask = X_pre_lag_full.index.get_level_values('date') <= split_date_val
-            test_mask = X_pre_lag_full.index.get_level_values('date') > split_date_val
+                if split_idx <= 0 or split_idx >= len(unique_dates):
+                    print(f"Calculated split index ({split_idx}) is invalid for date split config ({self.test_split_config}). Skipping.")
+                    return None, None, None, None
+                split_date_val = unique_dates[split_idx - 1]
+            else:
+                print(f"Invalid test_split_config type or value ({self.test_split_config}) for date split. Skipping.")
+                return None, None, None, None # Invalid split config
+
+            train_mask = X_full.index.get_level_values('date') <= split_date_val
+            test_mask = X_full.index.get_level_values('date') > split_date_val
+
         elif self.train_test_split_dimension == "id":
-            if not (isinstance(self.test_split_config, float) and 0.0 < self.test_split_config < 1.0): return None, None, None, None, None, None
-            unique_ids = X_pre_lag_full.index.get_level_values('id').unique()
-            if len(unique_ids) < 2: return None, None, None, None, None, None
-            num_test_ids = int(np.ceil(len(unique_ids) * self.test_split_config))
+            if not (isinstance(self.test_split_config, float) and 0.0 < self.test_split_config < 1.0):
+                print(f"Invalid test_split_config type or value ({self.test_split_config}) for ID split. Skipping.")
+                return None, None, None, None
+            unique_ids = X_full.index.get_level_values('id').unique() # type: ignore
+            if len(unique_ids) < 2:
+                print(f"Not enough unique IDs ({len(unique_ids)}) for ID split. Skipping.")
+                return None, None, None, None
+            num_test_ids = int(np.ceil(len(unique_ids) * self.test_split_config)) # type: ignore
             if self.test_split_config > 0 and num_test_ids == 0: num_test_ids = 1
-            if num_test_ids == 0 or num_test_ids >= len(unique_ids): return None, None, None, None, None, None
-            
+            if num_test_ids == 0 or num_test_ids >= len(unique_ids):
+                print(f"Calculated number of test IDs ({num_test_ids}) is invalid for ID split config ({self.test_split_config}). Skipping.")
+                return None, None, None, None
+
             gss = GroupShuffleSplit(n_splits=1, test_size=num_test_ids, random_state=42)
             # Need to reset index for GSS groups argument
-            temp_X_reset = X_pre_lag_full.reset_index()
-            temp_y_reset = y_full.reset_index() # Not used for splitting y, but for consistency
+            temp_X_reset = X_full.reset_index()
             try:
-                train_indices, test_indices = next(gss.split(temp_X_reset, temp_y_reset, groups=temp_X_reset['id']))
-            except ValueError: return None, None, None, None, None, None # Error in GSS
-            
-            # Create masks from indices
-            train_mask = X_pre_lag_full.index.isin(temp_X_reset.iloc[train_indices].set_index(['id','date']).index)
-            test_mask = X_pre_lag_full.index.isin(temp_X_reset.iloc[test_indices].set_index(['id','date']).index)
-        else:
-            raise ValueError("train_test_split_dimension must be 'date' or 'id'")
+                # Pass temp_X_reset and y_full.reset_index() to split, but use temp_X_reset['id'] for groups
+                train_indices, test_indices = next(gss.split(temp_X_reset, y_full.reset_index(), groups=temp_X_reset['id'])) # type: ignore
+            except ValueError as e:
+                print(f"Error during GroupShuffleSplit: {e}. Skipping.")
+                return None, None, None, None
 
-        X_train_pre_lag = X_pre_lag_full[train_mask]
-        X_test_pre_lag = X_pre_lag_full[test_mask]
+            # Create masks from indices
+            train_mask = X_full.index.isin(temp_X_reset.iloc[train_indices].set_index(['id','date']).index)
+            test_mask = X_full.index.isin(temp_X_reset.iloc[test_indices].set_index(['id','date']).index)
+        else:
+            print(f"Invalid train_test_split_dimension '{self.train_test_split_dimension}'. Must be 'date' or 'id'. Skipping.")
+            return None, None, None, None
+
+        # Return the split dataframes/series
+        X_train = X_full[train_mask]
+        X_test = X_full[test_mask]
         y_train = y_full[train_mask]
         y_test = y_full[test_mask]
 
-        # --- Feature Lags for main models (applied after initial split) ---
-        # Identify numeric features from prophet_feature_list (which are the original features)
-        numeric_features_for_lags = [
-            f for f in prophet_feature_list
-            if f in X_train_pre_lag.columns and pd.api.types.is_numeric_dtype(X_train_pre_lag[f]) and f != self.target_variable
-        ]
-        # Categorical features are those in prophet_feature_list not in numeric_features_for_lags
-        categorical_model_features = [
-            f for f in prophet_feature_list
-            if f in X_train_pre_lag.columns and f not in numeric_features_for_lags and f != self.target_variable
-        ]
+        # Check if train set is empty after split
+        if X_train.empty or y_train.empty:
+             print("Warning: Train set is empty after split. Cannot proceed.")
+             return None, None, None, None
 
-        def _add_lags_to_df_internal(df_to_lag: pd.DataFrame, num_features_to_lag: List[str], num_lags: int) -> Tuple[pd.DataFrame, List[str]]:
-            df_out = df_to_lag.copy()
-            lagged_names: List[str] = []
-            if num_lags > 0:
-                for feat_name in num_features_to_lag:
+        return X_train, X_test, y_train, y_test
+
+    def _add_feature_lags_internal(self, df_to_lag: pd.DataFrame, num_features_to_lag: List[str], num_lags: int) -> Tuple[pd.DataFrame, List[str]]:
+        """Helper to add lags to specified numeric features within a DataFrame."""
+        df_out = df_to_lag.copy()
+        lagged_names: List[str] = []
+        if num_lags > 0 and not df_out.empty:
+            for feat_name in num_features_to_lag: # type: ignore
+                # Ensure feature exists before lagging
+                if feat_name in df_out.columns:
                     for lag_i in range(1, num_lags + 1):
                         lag_col = f"{feat_name}_lag_{lag_i}"
+                        # Use group_keys=False to prevent adding group keys to the index
                         df_out[lag_col] = df_out.groupby(level='id', group_keys=False)[feat_name].shift(lag_i)
                         lagged_names.append(lag_col)
-            return df_out, lagged_names
+                else:
+                     print(f"Warning: Feature '{feat_name}' not found in DataFrame for lagging.")
+        return df_out, lagged_names
 
-        X_train_with_feature_lags, train_lagged_names = _add_lags_to_df_internal(
-            X_train_pre_lag, numeric_features_for_lags, self.num_lags_to_include
+    def _combine_features_and_align_target(
+        self,
+        X_train_pre_lagged: pd.DataFrame,
+        X_test_pre_lagged: pd.DataFrame,
+        y_train_full: pd.Series,
+        ar_term_names: List[str],
+        y_test_full: pd.Series, # Moved y_test_full here
+        horizon: int, # Add horizon as an argument
+        numeric_features_for_lags: List[str], # Keep this argument
+        categorical_features: List[str],
+        num_lags: int
+    ) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[pd.Series], Optional[pd.Series]]:
+        """
+        Adds feature lags and AR terms, selects final columns, drops resulting NaNs,
+        and aligns target variables.
+        """
+        # Add feature lags to train set
+        X_train_with_feature_lags, train_lagged_names = self._add_feature_lags_internal(
+            X_train_pre_lagged, numeric_features_for_lags, num_lags
         )
-        
-        X_test_with_feature_lags = pd.DataFrame(index=X_test_pre_lag.index) # Init empty
-        if not X_test_pre_lag.empty:
-            # For test lags, concat train_pre_lag and test_pre_lag to avoid lookahead bias within test but allow history from train
-            combined_for_test_feature_lags = pd.concat([X_train_pre_lag, X_test_pre_lag]).sort_index()
-            combined_with_feature_lags, _ = _add_lags_to_df_internal(
-                combined_for_test_feature_lags, numeric_features_for_lags, self.num_lags_to_include
+
+        # Add feature lags to test set (requires combining train and test for correct shifting)
+        X_test_with_feature_lags = pd.DataFrame(index=X_test_pre_lagged.index) # Init empty
+        if not X_test_pre_lagged.empty and num_lags > 0 and numeric_features_for_lags:
+            # For test lags, concat train_pre_lagged and test_pre_lagged to avoid lookahead bias within test but allow history from train
+            # Ensure columns match before concat
+            common_cols = list(set(X_train_pre_lagged.columns) & set(X_test_pre_lagged.columns))
+            combined_for_test_feature_lags = pd.concat([X_train_pre_lagged[common_cols], X_test_pre_lagged[common_cols]]).sort_index()
+
+            combined_with_feature_lags, _ = self._add_feature_lags_internal(
+                combined_for_test_feature_lags, numeric_features_for_lags, num_lags
             )
-            X_test_with_feature_lags = combined_with_feature_lags.loc[X_test_pre_lag.index]
+            X_test_with_feature_lags = combined_with_feature_lags.loc[X_test_pre_lagged.index]
 
         # Define final features for main models
-        final_model_feature_names = categorical_model_features[:]
-        if self.num_lags_to_include > 0:
+        final_model_feature_names = categorical_features[:]
+        if num_lags > 0:
+            # Use the names generated from the train set lagging
             final_model_feature_names.extend(train_lagged_names)
         else: # No feature lags, use original numeric features
             final_model_feature_names.extend(numeric_features_for_lags)
-        
+
         # Add AR terms (if any) to this list
         final_model_feature_names.extend(ar_term_names)
-        final_model_feature_names = sorted(list(set(final_model_feature_names))) # Unique and sorted
+        # Ensure all elements are strings before sorting to avoid TypeError
+        final_model_feature_names = sorted([str(item) for item in list(set(final_model_feature_names))])
 
-        # Select these features for X_train_main_unscaled / X_test_main_unscaled
-        # X_train_with_feature_lags already has original cat/num features + their lags. Need to add AR terms.
         X_train_main_unscaled = X_train_with_feature_lags.copy()
         X_test_main_unscaled = X_test_with_feature_lags.copy()
 
-        for ar_name in ar_term_names: # Add AR terms from df_h
-            X_train_main_unscaled[ar_name] = df_h.loc[X_train_main_unscaled.index, ar_name]
-            if not X_test_main_unscaled.empty:
-                 X_test_main_unscaled[ar_name] = df_h.loc[X_test_main_unscaled.index, ar_name]
-        
         # Ensure only final_model_feature_names are present and in order
-        X_train_main_unscaled = X_train_main_unscaled[final_model_feature_names]
+        # Filter columns to only those that actually exist in the DataFrame after adding lags/AR terms
+        final_model_feature_names_existing_train = [col for col in final_model_feature_names if col in X_train_main_unscaled.columns]
+        X_train_main_unscaled = X_train_main_unscaled[final_model_feature_names_existing_train]
+
         if not X_test_main_unscaled.empty:
-            X_test_main_unscaled = X_test_main_unscaled[final_model_feature_names]
-        else: # Ensure empty test df has correct columns
-            X_test_main_unscaled = pd.DataFrame(columns=final_model_feature_names, index=X_test_main_unscaled.index)
+            # Filter test columns to match the final train columns
+            final_model_feature_names_existing_test = [col for col in final_model_feature_names_existing_train if col in X_test_main_unscaled.columns]
+            X_test_main_unscaled = X_test_main_unscaled[final_model_feature_names_existing_test]
+        else: # Ensure empty test df has correct columns matching train
+            X_test_main_unscaled = pd.DataFrame(columns=final_model_feature_names_existing_train, index=X_test_main_unscaled.index)
+
 
         # Drop NaNs from lagging features and AR terms, then align y
+        initial_train_rows = len(X_train_main_unscaled)
         X_train_main_unscaled.dropna(inplace=True)
-        y_train = y_train.loc[X_train_main_unscaled.index]
+        if len(X_train_main_unscaled) < initial_train_rows:
+             print(f"Dropped {initial_train_rows - len(X_train_main_unscaled)} rows from train set due to NaNs after lagging/AR terms.")
+
+        # Ensure y_train index is a subset of X_train_main_unscaled index before loc
+        y_train = y_train_full.loc[y_train_full.index.intersection(X_train_main_unscaled.index)]
+        # Re-align X_train to the potentially smaller y_train index
+        X_train_main_unscaled = X_train_main_unscaled.loc[y_train.index]
+
 
         if not X_test_main_unscaled.empty:
+            initial_test_rows = len(X_test_main_unscaled)
             X_test_main_unscaled.dropna(inplace=True)
-            y_test = y_test.loc[X_test_main_unscaled.index]
-
-        # Data for Prophet (original features, aligned with final y_train/y_test)
-        X_train_prophet_unscaled = X_train_pre_lag[prophet_feature_list].loc[y_train.index] if not y_train.empty else pd.DataFrame(columns=prophet_feature_list)
-        X_test_prophet_unscaled = X_test_pre_lag[prophet_feature_list].loc[y_test.index] if not y_test.empty else pd.DataFrame(columns=prophet_feature_list)
+            if len(X_test_main_unscaled) < initial_test_rows:
+                 print(f"Dropped {initial_test_rows - len(X_test_main_unscaled)} rows from test set due to NaNs after lagging/AR terms.")
+            # Ensure y_test index is a subset of X_test_main_unscaled index before loc
+            y_test = y_test_full.loc[y_test_full.index.intersection(X_test_main_unscaled.index)]
+            # Re-align X_test to the potentially smaller y_test index
+            X_test_main_unscaled = X_test_main_unscaled.loc[y_test.index]
+        else:
+             # Ensure y_test is empty if X_test is empty
+             y_test = pd.Series(dtype='float64', index=pd.MultiIndex.from_tuples([], names=['id', 'date']))
 
         if X_train_main_unscaled.empty or y_train.empty:
-            print(f"Train set empty after final processing for H{horizon}. Skipping.")
-            return None, None, None, None, None, None
+            print("Train set empty after combining features and aligning target. Skipping.")
+            return None, None, None, None
 
-        # --- Scaling and OHE ---
-        numeric_cols_for_scaling = X_train_main_unscaled.select_dtypes(include=np.number).columns.tolist()
-        categorical_cols_for_ohe = X_train_main_unscaled.select_dtypes(include=['object', 'category']).columns.tolist()
+        return X_train_main_unscaled, X_test_main_unscaled, y_train, y_test # type: ignore
+
+    def _scale_and_encode_features(self, X_train_unscaled: pd.DataFrame, X_test_unscaled: pd.DataFrame) -> Tuple[
+        Optional[pd.DataFrame], Optional[pd.DataFrame]
+    ]:
+        """Applies StandardScaler to numeric features and OneHotEncoder to categorical features."""
+        if X_train_unscaled.empty:
+            print("Cannot scale/encode: X_train_unscaled is empty.")
+            return None, None
+
+        # Identify numeric and categorical columns based on the train set
+        numeric_cols_for_scaling = X_train_unscaled.select_dtypes(include=np.number).columns.tolist()
+        categorical_cols_for_ohe = X_train_unscaled.select_dtypes(include=['object', 'category']).columns.tolist()
 
         transformers_list = []
         if numeric_cols_for_scaling:
             transformers_list.append(('num', StandardScaler(), numeric_cols_for_scaling))
         if categorical_cols_for_ohe:
+            # Use handle_unknown='ignore' and drop=None for robustness
             transformers_list.append(('cat', OneHotEncoder(handle_unknown='ignore', sparse_output=False, drop=None), categorical_cols_for_ohe))
 
         if not transformers_list: # No numeric or categorical features to transform
-            X_train_final = X_train_main_unscaled.copy()
-            X_test_final = X_test_main_unscaled.copy()
+            print("Warning: No numeric or categorical features found for scaling/OHE. Returning unscaled/unencoded data.")
+            return X_train_unscaled.copy(), X_test_unscaled.copy()
         else:
+            # Use remainder='drop' as we've already selected the final columns
             preprocessor = ColumnTransformer(transformers=transformers_list, remainder='drop')
-            
-            X_train_transformed_np = preprocessor.fit_transform(X_train_main_unscaled)
-            transformed_names = preprocessor.get_feature_names_out()
-            X_train_final = pd.DataFrame(X_train_transformed_np, columns=transformed_names, index=X_train_main_unscaled.index)
 
-            if not X_test_main_unscaled.empty:
-                X_test_transformed_np = preprocessor.transform(X_test_main_unscaled)
-                X_test_final = pd.DataFrame(X_test_transformed_np, columns=transformed_names, index=X_test_main_unscaled.index)
-            else:
-                X_test_final = pd.DataFrame(columns=transformed_names, index=X_test_main_unscaled.index)
+            try:
+                X_train_transformed_np = preprocessor.fit_transform(X_train_unscaled)
+                transformed_names = preprocessor.get_feature_names_out()
+                X_train_final = pd.DataFrame(X_train_transformed_np, columns=transformed_names, index=X_train_unscaled.index)
+
+                if not X_test_unscaled.empty:
+                    X_test_transformed_np = preprocessor.transform(X_test_unscaled)
+                    X_test_final = pd.DataFrame(X_test_transformed_np, columns=transformed_names, index=X_test_unscaled.index)
+                else:
+                    # Create an empty test DataFrame with the correct columns
+                    X_test_final = pd.DataFrame(columns=transformed_names, index=X_test_unscaled.index)
+            except Exception as e:
+                 print(f"Error during scaling/OHE: {e}. Returning None for data.")
+                 return None, None
+
+        return X_train_final, X_test_final
+
+    def get_horizon_specific_data(self, horizon: int) -> Tuple[
+        Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[pd.Series], Optional[pd.Series], Optional[pd.Series], Optional[pd.Series],
+    ]:
+        # Removed Prophet dataframes from return signature
+        """
+        Orchestrates the data preparation steps for a specific forecast horizon,
+        returning scaled/encoded and unscaled train/test data, and the targets.
+        """
+        print(f"--- Preparing Data for Horizon H{horizon} ---")
+
+        if self.base_data_for_horizons is None or self.base_data_for_horizons.empty:
+            print("Base data is not prepared or is empty. Cannot generate data for any horizon.")
+            return None, None, None, None, None, None
+
+        df_h = self.base_data_for_horizons.copy().sort_index()
         
-        return X_train_final, X_test_final, y_train, y_test, X_train_prophet_unscaled, X_test_prophet_unscaled
+        # Step 1 & 2: Add AR lags and Shifted Target to the base data
+        df_h_with_lags_target, ar_term_names, shifted_target_col = self._prepare_data_with_lags_and_target(horizon)
+
+        if df_h_with_lags_target is None or not shifted_target_col:
+             print(f"Data preparation failed after adding lags/target for H{horizon}. Skipping.")
+             return None, None, None, None
+
+        df_h = df_h_with_lags_target # Use the DataFrame with lags and shifted target
+
+        # Step 3: Drop NaNs introduced by shifting/lagging target/AR
+        df_h_filtered = self._drop_nans_after_shifting_lagging(df_h, shifted_target_col, ar_term_names)
+
+        if df_h_filtered.empty:
+            print(f"DataFrame empty for H{horizon} after initial NaN drop. Skipping.")
+            return None, None, None, None, None, None
+
+        # Extract full X and y before feature lagging and final NaN drop
+        # X_pre_lag_full will contain original features and AR terms.
+        cols_for_X_pre_lag_full = self.final_feature_list_for_horizon_processing[:]
+        if ar_term_names: # ar_term_names comes from _prepare_data_with_lags_and_target
+            cols_for_X_pre_lag_full.extend(ar_term_names)
+        
+        # Ensure all columns exist in df_h_filtered before selection and are unique
+        unique_cols_for_X_pre_lag_full = sorted(list(set(str(c) for c in cols_for_X_pre_lag_full)))
+        existing_cols_in_df_h_filtered = [c for c in unique_cols_for_X_pre_lag_full if c in df_h_filtered.columns]
+        
+        if not existing_cols_in_df_h_filtered:
+            print(f"Error: No features found for X_pre_lag_full from df_h_filtered for H{horizon} (cols sought: {unique_cols_for_X_pre_lag_full}). Skipping.")
+            return None, None, None, None, None, None
+        X_pre_lag_full = df_h_filtered[existing_cols_in_df_h_filtered].copy()
+
+        # Ensure shifted target column exists before accessing
+        if shifted_target_col not in df_h_filtered.columns:
+             print(f"Error: Shifted target column '{shifted_target_col}' not found after processing for H{horizon}. Skipping.")
+             return None, None, None, None, None, None
+
+        y_full = df_h_filtered[shifted_target_col]
+
+        if X_pre_lag_full.empty or y_full.empty or len(X_pre_lag_full) != len(y_full):
+            print(f"X_pre_lag_full or y_full empty or mismatched for H{horizon} before split. Skipping.")
+            return None, None, None, None, None, None
+
+        # Step 4: Perform Train/Test Split on data *before* feature lagging
+        X_train_pre_lag, X_test_pre_lag, y_train_full, y_test_full = self._perform_train_test_split(X_pre_lag_full, y_full)
+
+        if X_train_pre_lag is None or X_train_pre_lag.empty or y_train_full is None or y_train_full.empty:
+            print(f"Train set empty after split for H{horizon}. Skipping.")
+            return None, None, None, None, None, None
+
+        # Identify numeric (for lagging) and categorical features from X_train_pre_lag.
+        # These should be *original* features, EXCLUDING AR terms.
+        # ar_term_names contains the names of the AR terms.
+        original_feature_candidates_in_X_train = [
+            f for f in X_train_pre_lag.columns if f not in (ar_term_names if ar_term_names else [])
+        ]
+
+        numeric_features_for_lags = [
+            f for f in original_feature_candidates_in_X_train
+            if pd.api.types.is_numeric_dtype(X_train_pre_lag[f]) and \
+               f != self.target_variable # self.target_variable should not be in X_train_pre_lag anyway
+        ]
+        categorical_model_features = [ # Original categorical features
+            f for f in original_feature_candidates_in_X_train
+            if f not in numeric_features_for_lags and \
+               f != self.target_variable # self.target_variable should not be in X_train_pre_lag anyway
+        ]
+
+        # Step 5: Add Feature Lags, Combine Features (Original + Feature Lags + AR), Drop NaNs, Align Target
+        # Corrected argument order: y_train_full, ar_term_names, y_test_full
+        X_train_main_unscaled, X_test_main_unscaled, y_train, y_test = self._combine_features_and_align_target(
+            X_train_pre_lag, X_test_pre_lag, y_train_full, ar_term_names, y_test_full,
+            horizon, numeric_features_for_lags, categorical_model_features, self.num_lags_to_include) # type: ignore
+
+        # Step 7: Scale and Encode Features for main models
+        X_train_final, X_test_final = self._scale_and_encode_features(X_train_main_unscaled, X_test_main_unscaled)
+
+        if X_train_final is None or X_train_final.empty:
+             print(f"Train set became empty after scaling/OHE for H{horizon}. Skipping.")
+             return None, None, None, None, None, None
+
+        print(f"Data preparation for H{horizon} complete. Train shape: {X_train_final.shape}, Test shape: {X_test_final.shape}") # type: ignore
+
+        return X_train_final, X_test_final, y_train, y_test, X_train_main_unscaled, X_test_main_unscaled # type: ignore
