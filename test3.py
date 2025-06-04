@@ -15,7 +15,7 @@ FORECAST_HORIZONS = list(range(1, 2))  # 1 to 8 quarters ahead
 NUMBER_OF_LAGS_TO_INCLUDE = 8
 
 TRAIN_TEST_SPLIT_DIMENSION = 'date'
-TEST_SPLIT = "2022-01-01" # Can be a float (e.g., 0.2) or a date string (e.g., "2007-12-01")
+TEST_SPLIT = 0.2 #"2022-01-01" # Can be a float (e.g., 0.2) or a date string (e.g., "2007-12-01")
 N_SPLITS_CV = 3
 
 # Data cut offs

@@ -20,7 +20,7 @@ raw_variables = [
     'trading_assets', 'net_interest_income', 'interest_income',
     'non_interest_income', 'interest_expense' 'tbill_3m', 'tbill_10y',
     'allowance_for_loan_and_leases_losses', 'allowance_for_credit_losses', 'allowance_for_loans_and_leases_losses',
-    'provisions_for_credit_losses', 'total_charge_offs'
+    'provisions_for_credit_losses', 'net_charge_offs'
 ]
 
 feature_variables = ['gdp_qoq', 'cpi_qoq', 'cons_sentiment_qoq', 'unemployment',
@@ -80,6 +80,7 @@ def calculate_financial_ratios(df):
     df_processed['net_interest_income_to_assets'] = df_processed['net_interest_income'] / df_processed['total_assets']
     df_processed['interest_income_to_assets'] = df_processed['interest_income'] / df_processed['total_assets']
     df_processed['non_interest_income_to_assets'] = df_processed['non_interest_income'] / df_processed['total_assets']
+    df_processed['net_charge_offs_to_loans_and_leases'] = df_processed['net_charge_offs'] / df_processed['total_loans_and_leases']
     df_processed['interest_expense_to_assets'] = df_processed['interest_expense']/ df_processed['total_assets']
     df_processed['npl_ratio'] = df_processed['npl'] / df_processed['total_loans_and_leases']
     df_processed['charge_off_ratio'] = df_processed['total_charge_offs'] / df_processed['total_loans_and_leases']

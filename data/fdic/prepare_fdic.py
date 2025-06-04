@@ -90,6 +90,7 @@ risk_weighted_assets_codes = {
 # Asset quality identifiers
 asset_quality_codes = {
     "RIAD4635": "total_charge_offs",
+    "RIAD4605": "total_recoveries",
     "RCON1407": "npl",
     "RCFD1407": "npl"
 }
@@ -441,6 +442,12 @@ x = selected_df[~selected_df['id'].isin(selected_df2['id'])].copy()
 selected_df = selected_df2.copy()
 selected_df2 = None  # Free memory
 #endregion
+
+
+# ----------------------------------------------------------------------------------------
+#region Calculations
+# ----------------------------------------------------------------------------------------
+selected_df['net_charge_offs'] = selected_df['total_charge_offs'] - selected_df['total_recoveries']
 
 
 # ----------------------------------------------------------------------------------------
