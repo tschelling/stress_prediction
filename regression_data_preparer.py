@@ -5,7 +5,7 @@ from sklearn.compose import ColumnTransformer
 from sklearn.model_selection import GroupShuffleSplit
 from typing import Any, List, Tuple, Optional, Union # Import necessary types
 
-class PanelDataPreparer:
+class RegressionDataPreparer:
     def __init__(self, initial_df: pd.DataFrame, config: dict[str, any]): # Now 'Any' is defined
         self.initial_df = initial_df.copy()
         self.config = config.copy()
@@ -180,8 +180,9 @@ class PanelDataPreparer:
         self.base_data_for_horizons = df.copy()
         print(f"Base data prepared. Shape: {self.base_data_for_horizons.shape}")
         print(f"Final features for horizon processing: {self.final_feature_list_for_horizon_processing}")
-
+    
     def _prepare_data_with_lags_and_target(self, horizon: int) -> Tuple[Optional[pd.DataFrame], Optional[List[str]], Optional[str]]:
+
         if self.base_data_for_horizons is None or self.base_data_for_horizons.empty:
             print(f"Base data is not prepared or is empty. Cannot generate data for horizon {horizon}.")
             return None, None, None # Corrected to return three None values
@@ -204,14 +205,15 @@ class PanelDataPreparer:
                     # If target is missing, we cannot create any AR lags, so return the original df and empty list
                     return df_h, [], "" # Return df_h, empty ar_term_names, empty shifted_target_col
 
-        # Ensure target variable exists before trying to shift (redundant check, but safe)
         # Call _add_shifted_target to actually perform the shift and get the column name
         df_h, shifted_target_col = self._add_shifted_target(df_h, horizon)
         if not shifted_target_col: # If _add_shifted_target failed (e.g., target missing)
             print(f"Failed to add shifted target for horizon {horizon}.")
+            # Return df_h as is, with any AR terms added, but no shifted target
             return df_h, ar_term_names, "" # Return current df_h, ar_terms, and empty shifted_target_col
 
         return df_h, ar_term_names, shifted_target_col
+    
     def _add_shifted_target(self, df_h: pd.DataFrame, horizon: int) -> Tuple[pd.DataFrame, str]:
         """Adds the shifted target variable for the given horizon."""
         shifted_target_col = f'{self.target_variable}_target_h{horizon}'
@@ -225,23 +227,6 @@ class PanelDataPreparer:
              return df_h, ""
 
         return df_h, shifted_target_col
-
-    def _drop_nans_after_shifting_lagging(self, df_h: pd.DataFrame, shifted_target_col: str, ar_term_names: List[str]) -> pd.DataFrame:
-        """Drops rows with NaNs introduced by shifting the target or adding AR lags."""
-        cols_to_check_for_na = []
-        if shifted_target_col and shifted_target_col in df_h.columns:
-            cols_to_check_for_na.append(shifted_target_col)
-        cols_to_check_for_na.extend([name for name in ar_term_names if name in df_h.columns])
-
-        if not cols_to_check_for_na:
-             print(f"Warning: No valid columns found for NaN drop after shifting/lagging. Skipping dropna.")
-             return df_h.copy()
-        else:
-            print(f"Dropping NaNs based on subset: {cols_to_check_for_na}")
-            rows_before_na_drop = len(df_h)
-            df_h_filtered = df_h.dropna(subset=cols_to_check_for_na).copy()
-            print(f"Rows before NaN drop: {rows_before_na_drop}, after: {len(df_h_filtered)}. Removed: {rows_before_na_drop - len(df_h_filtered)}")
-            return df_h_filtered
 
     def _perform_train_test_split(self, X_full: pd.DataFrame, y_full: pd.Series) -> Tuple[
         Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[pd.Series], Optional[pd.Series]
@@ -346,10 +331,10 @@ class PanelDataPreparer:
         return df_out, lagged_names
 
     def _combine_features_and_align_target(
-        self,
-        X_train_pre_lagged: pd.DataFrame,
-        X_test_pre_lagged: pd.DataFrame,
-        y_train_full: pd.Series,
+        self, # Keep self as it's a method
+        X_train_pre_lagged: pd.DataFrame, # This now includes AR terms and is already NaN-filtered based on target/AR/feature lags
+        X_test_pre_lagged: pd.DataFrame,  # This now includes AR terms and is already NaN-filtered based on target/AR/feature lags
+        y_train_full: pd.Series, # This is already aligned with X_train_pre_lagged
         ar_term_names: List[str],
         y_test_full: pd.Series, # Moved y_test_full here
         horizon: int, # Add horizon as an argument
@@ -361,6 +346,10 @@ class PanelDataPreparer:
         Adds feature lags and AR terms, selects final columns, drops resulting NaNs,
         and aligns target variables.
         """
+        # X_train_pre_lagged and X_test_pre_lagged already contain AR terms
+        # and have been filtered for NaNs from shifted target, AR terms, AND feature lags.
+        # y_train_full and y_test_full are already aligned with these.
+
         # Add feature lags to train set
         X_train_with_feature_lags, train_lagged_names = self._add_feature_lags_internal(
             X_train_pre_lagged, numeric_features_for_lags, num_lags
@@ -368,16 +357,23 @@ class PanelDataPreparer:
 
         # Add feature lags to test set (requires combining train and test for correct shifting)
         X_test_with_feature_lags = pd.DataFrame(index=X_test_pre_lagged.index) # Init empty
+        test_lagged_names = [] # Keep track of test lagged names for column alignment
         if not X_test_pre_lagged.empty and num_lags > 0 and numeric_features_for_lags:
             # For test lags, concat train_pre_lagged and test_pre_lagged to avoid lookahead bias within test but allow history from train
             # Ensure columns match before concat
-            common_cols = list(set(X_train_pre_lagged.columns) & set(X_test_pre_lagged.columns))
+            common_cols = list(set(X_train_pre_lagged.columns) & set(X_test_pre_lagged.columns)) # Should be original features + AR terms
             combined_for_test_feature_lags = pd.concat([X_train_pre_lagged[common_cols], X_test_pre_lagged[common_cols]]).sort_index()
 
             combined_with_feature_lags, _ = self._add_feature_lags_internal(
                 combined_for_test_feature_lags, numeric_features_for_lags, num_lags
             )
             X_test_with_feature_lags = combined_with_feature_lags.loc[X_test_pre_lagged.index]
+
+            # Generate test lagged names based on the columns that were actually lagged
+            test_lagged_names = [
+                f"{feat_name}_lag_{lag_i}" for feat_name in numeric_features_for_lags
+                for lag_i in range(1, num_lags + 1) if f"{feat_name}_lag_{lag_i}" in X_test_with_feature_lags.columns
+            ]
 
         # Define final features for main models
         final_model_feature_names = categorical_features[:]
@@ -388,50 +384,64 @@ class PanelDataPreparer:
             final_model_feature_names.extend(numeric_features_for_lags)
 
         # Add AR terms (if any) to this list
-        final_model_feature_names.extend(ar_term_names)
+        final_model_feature_names.extend(ar_term_names) # ar_term_names are already in X_train_pre_lagged/X_test_pre_lagged
+
         # Ensure all elements are strings before sorting to avoid TypeError
         final_model_feature_names = sorted([str(item) for item in list(set(final_model_feature_names))])
 
-        X_train_main_unscaled = X_train_with_feature_lags.copy()
-        X_test_main_unscaled = X_test_with_feature_lags.copy()
+        # Ensure only final_model_feature_names are present and in order for the train set
+        final_model_feature_names_existing_train = [col for col in final_model_feature_names if col in X_train_with_feature_lags.columns]
+        X_train_main_unscaled = X_train_with_feature_lags[final_model_feature_names_existing_train].copy()
 
         # Ensure only final_model_feature_names are present and in order
-        # Filter columns to only those that actually exist in the DataFrame after adding lags/AR terms
-        final_model_feature_names_existing_train = [col for col in final_model_feature_names if col in X_train_main_unscaled.columns]
-        X_train_main_unscaled = X_train_main_unscaled[final_model_feature_names_existing_train]
-
-        if not X_test_main_unscaled.empty:
+        if not X_test_with_feature_lags.empty: # Process test set only if it's not empty
             # Filter test columns to match the final train columns
-            final_model_feature_names_existing_test = [col for col in final_model_feature_names_existing_train if col in X_test_main_unscaled.columns]
-            X_test_main_unscaled = X_test_main_unscaled[final_model_feature_names_existing_test]
-        else: # Ensure empty test df has correct columns matching train
-            X_test_main_unscaled = pd.DataFrame(columns=final_model_feature_names_existing_train, index=X_test_main_unscaled.index)
+            # Use X_test_with_feature_lags.columns as X_test_main_unscaled is not fully defined for this check yet
+            final_model_feature_names_existing_test = [
+                col for col in final_model_feature_names_existing_train if col in X_test_with_feature_lags.columns
+            ]
+            X_test_main_unscaled = X_test_with_feature_lags[final_model_feature_names_existing_test].copy()
 
+            # NaNs from feature lags should ideally be minimal or zero here because we dropped based on *all* potential lags before the split.
+            # However, a final dropna is a safeguard.
+            initial_test_rows = len(X_test_main_unscaled)
+            X_test_main_unscaled.dropna(inplace=True)
+            if len(X_test_main_unscaled) < initial_test_rows:
+                 print(f"Dropped {initial_test_rows - len(X_test_main_unscaled)} rows from test set due to NaNs after lagging/AR terms.")
+            
+            # Ensure y_test index is a subset of X_test_main_unscaled index before loc
+            # Also, handle if X_test_main_unscaled became empty after dropna
+            if not X_test_main_unscaled.empty:
+                y_test = y_test_full.loc[y_test_full.index.intersection(X_test_main_unscaled.index)].copy() # Use .copy() for safety
+                # Re-align X_test to the potentially smaller y_test index
+                X_test_main_unscaled = X_test_main_unscaled.loc[y_test.index]
+            else: # X_test_main_unscaled is now empty after dropna
+                y_test = pd.Series(dtype='float64', index=pd.MultiIndex.from_tuples([], names=['id', 'date']))
+                # X_test_main_unscaled is already empty, its columns are correct from its creation
 
-        # Drop NaNs from lagging features and AR terms, then align y
+        else: # X_test_with_feature_lags was empty
+            # Ensure empty test df has correct columns matching train
+            # Use X_test_with_feature_lags.index as X_test_main_unscaled.index would be undefined here.
+            X_test_main_unscaled = pd.DataFrame(
+                columns=final_model_feature_names_existing_train,
+                index=X_test_with_feature_lags.index 
+            )
+            # Ensure y_test is empty if X_test is empty
+            y_test = pd.Series(dtype='float64', index=pd.MultiIndex.from_tuples([], names=['id', 'date']))
+        
+        # NaNs from feature lags should ideally be minimal or zero in train set here
+        # because we dropped based on *all* potential lags before the split.
+        # However, a final dropna is a safeguard.
         initial_train_rows = len(X_train_main_unscaled)
         X_train_main_unscaled.dropna(inplace=True)
         if len(X_train_main_unscaled) < initial_train_rows:
              print(f"Dropped {initial_train_rows - len(X_train_main_unscaled)} rows from train set due to NaNs after lagging/AR terms.")
 
-        # Ensure y_train index is a subset of X_train_main_unscaled index before loc
-        y_train = y_train_full.loc[y_train_full.index.intersection(X_train_main_unscaled.index)]
-        # Re-align X_train to the potentially smaller y_train index
-        X_train_main_unscaled = X_train_main_unscaled.loc[y_train.index]
-
-
-        if not X_test_main_unscaled.empty:
-            initial_test_rows = len(X_test_main_unscaled)
-            X_test_main_unscaled.dropna(inplace=True)
-            if len(X_test_main_unscaled) < initial_test_rows:
-                 print(f"Dropped {initial_test_rows - len(X_test_main_unscaled)} rows from test set due to NaNs after lagging/AR terms.")
-            # Ensure y_test index is a subset of X_test_main_unscaled index before loc
-            y_test = y_test_full.loc[y_test_full.index.intersection(X_test_main_unscaled.index)]
-            # Re-align X_test to the potentially smaller y_test index
-            X_test_main_unscaled = X_test_main_unscaled.loc[y_test.index]
-        else:
-             # Ensure y_test is empty if X_test is empty
-             y_test = pd.Series(dtype='float64', index=pd.MultiIndex.from_tuples([], names=['id', 'date']))
+        # Re-align y_train and y_test to the potentially smaller X_train/X_test indices after the final dropna
+        # This step is crucial if any rows were dropped in the final dropna calls above.
+        y_train = y_train_full.loc[y_train_full.index.intersection(X_train_main_unscaled.index)].copy() # Use .copy() for safety
+        # X_train_main_unscaled is already aligned to y_train.index by the dropna/loc above
+        X_test_main_unscaled = X_test_main_unscaled.loc[y_test.index] # Corrected variable name
 
         if X_train_main_unscaled.empty or y_train.empty:
             print("Train set empty after combining features and aligning target. Skipping.")
@@ -496,29 +506,56 @@ class PanelDataPreparer:
             print("Base data is not prepared or is empty. Cannot generate data for any horizon.")
             return None, None, None, None, None, None
 
-        df_h = self.base_data_for_horizons.copy().sort_index()
+        # Start with a fresh copy of the base data for this horizon
+        df_h = self.base_data_for_horizons.copy()
         
-        # Step 1 & 2: Add AR lags and Shifted Target to the base data
+        # Step 1: Add AR lags and Shifted Target
         df_h_with_lags_target, ar_term_names, shifted_target_col = self._prepare_data_with_lags_and_target(horizon)
 
         if df_h_with_lags_target is None or not shifted_target_col:
              print(f"Data preparation failed after adding lags/target for H{horizon}. Skipping.")
              return None, None, None, None
 
-        df_h = df_h_with_lags_target # Use the DataFrame with lags and shifted target
+        df_h_processed = df_h_with_lags_target # Use the DataFrame with lags and shifted target
 
-        # Step 3: Drop NaNs introduced by shifting/lagging target/AR
-        df_h_filtered = self._drop_nans_after_shifting_lagging(df_h, shifted_target_col, ar_term_names)
+        # Identify numeric features for which lags will be created *after* the split
+        # These are the original numeric features, excluding the target and any added FE columns
+        original_feature_candidates = [
+            f for f in self.final_feature_list_for_horizon_processing
+            if f != self.target_variable # Target is handled separately
+        ]
+        numeric_features_for_lags = [
+            f for f in original_feature_candidates
+            if pd.api.types.is_numeric_dtype(df_h_processed[f])
+        ]
 
+        # Identify ALL columns that will introduce NaNs due to shifting/lagging
+        cols_to_check_for_na = [shifted_target_col] # Shifted target always introduces NaNs
+        cols_to_check_for_na.extend(ar_term_names) # AR terms introduce NaNs
+        # Add names of columns that will be created by feature lagging
+        if self.include_ar_lags and self.num_lags_to_include > 0:
+             cols_to_check_for_na.extend([
+                 f"{feat}_lag_{lag}" for feat in numeric_features_for_lags
+                 for lag in range(1, self.num_lags_to_include + 1)
+             ])
+        
+        # Ensure all columns in cols_to_check_for_na actually exist in df_h_processed before subsetting
+        cols_to_check_for_na_existing = [col for col in cols_to_check_for_na if col in df_h_processed.columns]
+
+        # Step 2: Drop NaNs based on ALL columns that will introduce them (shifted target, AR, feature lags)
+        print(f"Dropping NaNs based on subset of columns that will introduce NaNs: {cols_to_check_for_na_existing}")
+        rows_before_na_drop = len(df_h_processed)
+        df_h_filtered = df_h_processed.dropna(subset=cols_to_check_for_na_existing).copy()
+        
         if df_h_filtered.empty:
             print(f"DataFrame empty for H{horizon} after initial NaN drop. Skipping.")
             return None, None, None, None, None, None
 
         # Extract full X and y before feature lagging and final NaN drop
-        # X_pre_lag_full will contain original features and AR terms.
+        # X_pre_lag_full will contain original features, AR terms, and potentially FE columns.
         cols_for_X_pre_lag_full = self.final_feature_list_for_horizon_processing[:]
         if ar_term_names: # ar_term_names comes from _prepare_data_with_lags_and_target
-            cols_for_X_pre_lag_full.extend(ar_term_names)
+            cols_for_X_pre_lag_full.extend(ar_term_names) # These columns are already in df_h_filtered
         
         # Ensure all columns exist in df_h_filtered before selection and are unique
         unique_cols_for_X_pre_lag_full = sorted(list(set(str(c) for c in cols_for_X_pre_lag_full)))
@@ -540,7 +577,7 @@ class PanelDataPreparer:
             print(f"X_pre_lag_full or y_full empty or mismatched for H{horizon} before split. Skipping.")
             return None, None, None, None, None, None
 
-        # Step 4: Perform Train/Test Split on data *before* feature lagging
+        # Step 3: Perform Train/Test Split on data *before* feature lagging
         X_train_pre_lag, X_test_pre_lag, y_train_full, y_test_full = self._perform_train_test_split(X_pre_lag_full, y_full)
 
         if X_train_pre_lag is None or X_train_pre_lag.empty or y_train_full is None or y_train_full.empty:
@@ -548,20 +585,14 @@ class PanelDataPreparer:
             return None, None, None, None, None, None
 
         # Identify numeric (for lagging) and categorical features from X_train_pre_lag.
-        # These should be *original* features, EXCLUDING AR terms.
-        # ar_term_names contains the names of the AR terms.
-        original_feature_candidates_in_X_train = [
-            f for f in X_train_pre_lag.columns if f not in (ar_term_names if ar_term_names else [])
-        ]
-
-        numeric_features_for_lags = [
-            f for f in original_feature_candidates_in_X_train
-            if pd.api.types.is_numeric_dtype(X_train_pre_lag[f]) and \
-               f != self.target_variable # self.target_variable should not be in X_train_pre_lag anyway
-        ]
+        # We already identified `numeric_features_for_lags` before the split.
+        # Now identify categorical features from the split data.
+        # These should be the original categorical features + any categorical FE columns ('quarter', 'year', 'bank_id').
         categorical_model_features = [ # Original categorical features
-            f for f in original_feature_candidates_in_X_train
-            if f not in numeric_features_for_lags and \
+            f for f in X_train_pre_lag.columns # Check columns in the split data
+            if f not in ar_term_names and # Exclude AR terms
+               f not in numeric_features_for_lags and # Exclude numeric features that will be lagged
+               f not in self.feature_variables_base and # Exclude original base features already covered
                f != self.target_variable # self.target_variable should not be in X_train_pre_lag anyway
         ]
 
@@ -569,7 +600,7 @@ class PanelDataPreparer:
         # Corrected argument order: y_train_full, ar_term_names, y_test_full
         X_train_main_unscaled, X_test_main_unscaled, y_train, y_test = self._combine_features_and_align_target(
             X_train_pre_lag, X_test_pre_lag, y_train_full, ar_term_names, y_test_full,
-            horizon, numeric_features_for_lags, categorical_model_features, self.num_lags_to_include) # type: ignore
+            horizon, numeric_features_for_lags, categorical_model_features, self.num_lags_to_include)
 
         # Step 7: Scale and Encode Features for main models
         X_train_final, X_test_final = self._scale_and_encode_features(X_train_main_unscaled, X_test_main_unscaled)
