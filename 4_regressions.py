@@ -41,6 +41,10 @@ TARGET_VARIABLE = 'interest_income_to_assets'
 FEATURE_VARIABLES = ['gdp_qoq', 'deposit_ratio', 'loan_to_asset_ratio', 'log_total_assets', 'cpi_qoq', 'unemployment', 
                      'household_delinq', 'tbill_3m', 'tbill_10y', 'spread_10y_3m', 'sp500_qoq', 
                      'corp_bond_spread', 'vix_qoq'] # Added more macro vars
+MODELS_TO_RUN = ["XGBoost", "Ridge", "Linear Regression", "DummyRegressor"] # Options: None (all models), or a list of model names, e.g., ["XGBoost", "Ridge", "NeuralNetwork"]
+# MODELS_TO_RUN = ["XGBoost", "Ridge", "NeuralNetwork", "DummyRegressor"] # Example: run only these
+# MODELS_TO_RUN = ["XGBoost"] # Example: run only XGBoost
+
 FORECAST_HORIZONS = list(range(1, 2))
 N_SPLITS_CV = 3
 
@@ -55,8 +59,8 @@ if tf.config.list_physical_devices('GPU'):
 
 # Training parameters
 USE_RANDOM_SEARCH_CV = True 
-N_ITER_RANDOM_SEARCH = 30   
-
+N_ITER_RANDOM_SEARCH = 100   
+ 
 # Artifact Storage
 SAVE_ARTIFACTS = True
 ARTIFACTS_BASE_DIR = "model_run_artifacts_test3"
@@ -693,7 +697,20 @@ for i, horizon_val in enumerate(FORECAST_HORIZONS): # Use enumerate to potential
             current_n_splits_cv = 0 
     tscv_splitter = TimeSeriesSplit(n_splits=current_n_splits_cv) if current_n_splits_cv >= 2 else None
 
-    for model_name_loop, model_instance_loop in models_config.items():
+    # Determine which models to run based on MODELS_TO_RUN config
+    model_names_to_process_this_horizon = list(models_config.keys()) # Default to all models
+    if MODELS_TO_RUN is not None and MODELS_TO_RUN: # If a specific list is provided and it's not empty
+        model_names_to_process_this_horizon = [
+            name for name in MODELS_TO_RUN if name in models_config
+        ]
+        # Log which models are being skipped or included based on the config
+        print(f"  Configured to run only: {model_names_to_process_this_horizon}")
+        for m_name_cfg in MODELS_TO_RUN:
+            if m_name_cfg not in models_config:
+                print(f"  Warning: Model '{m_name_cfg}' in MODELS_TO_RUN is not defined in models_config and will be skipped.")
+
+    for model_name_loop in model_names_to_process_this_horizon:
+        model_instance_loop = models_config[model_name_loop]
         print(f"  Training {model_name_loop} for horizon {horizon_val}...")
         model_results = None 
         if X_train_scaled_df.empty or y_train.empty:

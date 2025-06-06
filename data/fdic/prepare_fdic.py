@@ -128,7 +128,7 @@ flow_data_codes = {k: v for k, v in all_codes.items() if k.startswith("RIAD")}
 # ----------------------------------------------------------------------------------------
 # --- Find Input Parquet Files ---
 print(f"\nSearching for input files matching: {input_file_pattern}")
-all_found_files = glob.glob(f"parquet/{input_file_pattern}")
+all_found_files = glob.glob(f"data/fdic/parquet/{input_file_pattern}")
 
 # --- IMPORTANT: Filter out the intended output file ---
 parquet_files = sorted([
