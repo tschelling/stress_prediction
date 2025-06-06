@@ -41,7 +41,7 @@ TARGET_VARIABLE = 'interest_income_to_assets'
 FEATURE_VARIABLES = ['gdp_qoq', 'deposit_ratio', 'loan_to_asset_ratio', 'log_total_assets', 'cpi_qoq', 'unemployment', 
                      'household_delinq', 'tbill_3m', 'tbill_10y', 'spread_10y_3m', 'sp500_qoq', 
                      'corp_bond_spread', 'vix_qoq'] # Added more macro vars
-MODELS_TO_RUN = ["XGBoost", "Ridge", "Linear Regression", "DummyRegressor"] # Options: None (all models), or a list of model names, e.g., ["XGBoost", "Ridge", "NeuralNetwork"]
+MODELS_TO_RUN = ["XGBoost", "Linear Regression", "Lasso", "DummyRegressor"] # Options: None (all models), or a list of model names, e.g., ["XGBoost", "Ridge", "NeuralNetwork"]
 # MODELS_TO_RUN = ["XGBoost", "Ridge", "NeuralNetwork", "DummyRegressor"] # Example: run only these
 # MODELS_TO_RUN = ["XGBoost"] # Example: run only XGBoost
 
@@ -59,7 +59,7 @@ if tf.config.list_physical_devices('GPU'):
 
 # Training parameters
 USE_RANDOM_SEARCH_CV = True 
-N_ITER_RANDOM_SEARCH = 100   
+N_ITER_RANDOM_SEARCH = 20   
  
 # Artifact Storage
 SAVE_ARTIFACTS = True
@@ -88,7 +88,7 @@ c = {
     'TEST_SPLIT': 0.2                                  # Takes a number or a date in the format 'YYYY-MM-DD'
 }
 
-#%% Helper function to create Neural Network model for KerasRegressor
+# Helper function to create Neural Network model for KerasRegressor
 def create_nn_model(**kwargs): # Add use_batch_norm
     """
     Creates a Keras Sequential model for regression.
@@ -271,6 +271,7 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
 def _tune_hyperparameters(model_name_key: str, model_instance, X_train: pd.DataFrame, y_train: pd.Series,
                           param_grid: dict, cv_splitter,
                           use_random_search: bool, n_iter_random_search: int):
+    
     """
     Tunes hyperparameters for a given model using GridSearchCV or RandomizedSearchCV.
     Returns the best_estimator_ if tuning is successful, else None.
@@ -369,6 +370,9 @@ def _fit_model_with_tuning(model_name_key: str, model_instance, X_train: pd.Data
             model_instance.fit(X_train, y_train)
         fitted_model = model_instance
     return fitted_model
+
+
+#--------------------------------------------------------------------------------------------------------------------
 #region Helper Functions
 #--------------------------------------------------------------------------------------------------------------------
 
