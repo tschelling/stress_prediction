@@ -136,10 +136,10 @@ class RegressionDataPreparer:
                  print("Converted 'date' index level to datetime.")
 
             df['quarter'] = 'quarter_' + df.index.get_level_values('date').quarter.astype(str)
-            df['year'] = 'year_' + df.index.get_level_values('date').year.astype(str)
+            #df['year'] = 'year_' + df.index.get_level_values('date').year.astype(str)
             if 'quarter' not in current_feature_list: current_feature_list.append('quarter')
-            if 'year' not in current_feature_list: current_feature_list.append('year')
-            print("Added time fixed effects: 'quarter', 'year'.")
+            #if 'year' not in current_feature_list: current_feature_list.append('year')
+            print("Added time fixed effects: 'quarter'.")
 
         if self.include_bank_fe:
             # Use a list comprehension for robust string concatenation.

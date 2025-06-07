@@ -9,10 +9,16 @@ import pyarrow.parquet as pq # To read schema efficiently
 #region Configure
 # ----------------------------------------------------------------------------------------
 # Define the output filename for the extracted raw data
-output_filename_raw_subset = "fdic_data_extracted_raw_codes.parquet"
-output_filename_processed = "fdic_data_processed.parquet"
+script_dir = os.path.dirname(os.path.abspath(__file__))
+output_filename_raw_subset_name = "fdic_data_extracted_raw_codes.parquet"
+output_filename_processed_name = "fdic_data_processed.parquet"
+
+output_path_raw_subset = os.path.join(script_dir, output_filename_raw_subset_name)
+output_path_processed = os.path.join(script_dir, output_filename_processed_name)
+
 # Define the input files pattern
 input_file_pattern = '*.parquet'
+input_dir = os.path.join(script_dir, 'parquet') # Directory containing the input parquet files
 
 # --- Column Definitions (RESTORED as per your requirement) ---
 # These dictionaries define the mapping for later use,
@@ -45,6 +51,28 @@ balance_sheet_codes = {
     for prefix in balance_sheet_prefix
     for suffix, name in balance_sheet_suffix.items()
 }
+
+# Deposit structure
+deposit_structure_prefix = ["RCON"]
+# Deposit structure suffixes
+deposit_structure_suffix = {
+    "HK07": "dep_small_3m_less",
+    "HK08": "dep_small_3m_1y",
+    "HK09": "dep_small_1y_3y",
+    "HK10": "dep_small_3y_more", 
+    "HK12": "dep_large_3m_less", 
+    "HK13": "dep_large_3m_1y", 
+    "HK14": "dep_large_1y_3y", 
+    "HK15": "dep_large_3y_more", 
+}
+
+deposit_structure_codes = {
+    f"{prefix}{suffix}": name
+    for prefix in deposit_structure_prefix
+    for suffix, name in deposit_structure_suffix.items()
+}
+
+
 
 # Profitability
 income_statement_prefix = ["RIAD"]
@@ -100,6 +128,7 @@ asset_quality_codes = {
 all_codes = {
     **time_entity_codes,
     **balance_sheet_codes,
+    **deposit_structure_codes,
     **income_statement_codes,
     **capital_codes,
     **risk_weighted_assets_codes,
@@ -127,14 +156,14 @@ flow_data_codes = {k: v for k, v in all_codes.items() if k.startswith("RIAD")}
 #region Load files
 # ----------------------------------------------------------------------------------------
 # --- Find Input Parquet Files ---
-print(f"\nSearching for input files matching: {input_file_pattern}")
-all_found_files = glob.glob(f"data/fdic/parquet/{input_file_pattern}")
+print(f"\nSearching for input files in: {input_dir} matching: {input_file_pattern}")
+all_found_files = glob.glob(os.path.join(input_dir, input_file_pattern))
 
 # --- IMPORTANT: Filter out the intended output file ---
 parquet_files = sorted([
     f for f in all_found_files
-    if os.path.basename(f) != output_filename_raw_subset
-    and os.path.basename(f) != output_filename_processed
+    if f != output_path_raw_subset # Compare full paths
+    and f != output_path_processed # Compare full paths
 ])
 
 # --- Process Files ---
@@ -357,14 +386,14 @@ if processed_dfs:
 
 
         # --- Save Result ---
-        print(f"\nAttempting to save final extracted DataFrame ({fdic_raw.shape}) to {output_filename_raw_subset}...")
+        print(f"\nAttempting to save final extracted DataFrame ({fdic_raw.shape}) to {output_path_raw_subset}...")
         try:
              print("\nFinal Data Types (Raw Codes):")
              with pd.option_context('display.max_rows', 100): # Limit rows displayed
                  print(fdic_raw.dtypes)
              # Use standard compression like gzip or snappy. Zstd might require explicit install.
-             fdic_raw.to_parquet(output_filename_raw_subset, index=False, engine='pyarrow', compression='gzip')
-             print(f"\nFinal extracted DataFrame saved successfully to {output_filename_raw_subset}")
+             fdic_raw.to_parquet(output_path_raw_subset, index=False, engine='pyarrow', compression='gzip')
+             print(f"\nFinal extracted DataFrame saved successfully to {output_path_raw_subset}")
         except Exception as e:
              print(f"\nError saving final DataFrame to Parquet: {e}")
              # traceback.print_exc()
@@ -454,11 +483,9 @@ selected_df['net_charge_offs'] = selected_df['total_charge_offs'] - selected_df[
 #region Save data
 # ----------------------------------------------------------------------------------------
 
-
 # Save the selected DataFrame to a new Parquet file
-output_filename = "fdic_data_processed.parquet"
-selected_df.to_parquet(output_filename, index=False)
-print(f"Processed data saved to {output_filename}")
+selected_df.to_parquet(output_path_processed, index=False)
+print(f"Processed data saved to {output_path_processed}")
 #endregion
 
 

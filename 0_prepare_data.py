@@ -20,7 +20,9 @@ raw_variables = [
     'trading_assets', 'net_interest_income', 'interest_income',
     'non_interest_income', 'interest_expense' 'tbill_3m', 'tbill_10y',
     'allowance_for_loan_and_leases_losses', 'allowance_for_credit_losses', 'allowance_for_loans_and_leases_losses',
-    'provisions_for_credit_losses', 'net_charge_offs'
+    'provisions_for_credit_losses', 'net_charge_offs', 
+    'dep_small_3m_less', 'dep_small_3m_1y', 'dep_small_1y_3y', 'dep_small_3y_more', 
+    'dep_large_3m_less', 'dep_large_3m_1y', 'dep_large_1y_3y', 'dep_large_3y_more',
 ]
 
 feature_variables = ['gdp_qoq', 'cpi_qoq', 'cons_sentiment_qoq', 'unemployment',
@@ -64,38 +66,48 @@ def calculate_financial_ratios(df):
         pd.DataFrame: DataFrame with added ratio columns.
     """
     print("Calculating financial ratios...")
-    df_processed = df.copy()
+    df2 = df.copy()
 
     # Calculate ratios
-    df_processed['deposit_ratio'] = df_processed['total_deposits'] / df_processed['total_assets']
-    df_processed['loan_to_deposit_ratio'] = df_processed['total_loans_and_leases'] / df_processed['total_deposits']
-    df_processed['loan_to_asset_ratio'] = df_processed['total_loans_and_leases'] / df_processed['total_assets']
-    df_processed['equity_to_asset_ratio'] = df_processed['total_equity'] / df_processed['total_assets']
-    df_processed['trading_assets_ratio'] = df_processed['trading_assets'] / df_processed['total_assets']
-    df_processed['net_interest_margin'] = (
-        df_processed['interest_income'] - df_processed['interest_expense']
-    ) / df_processed['total_assets']
-    df_processed['roe'] = df_processed['net_income'] / df_processed['total_equity']
-    df_processed['roa'] = df_processed['net_income'] / df_processed['total_assets']
-    df_processed[         'net_income_to_assets'] =  df_processed[         'net_income']  / df_processed['total_assets']
-    df_processed['net_interest_income_to_assets'] =  df_processed['net_interest_income']  / df_processed['total_assets']
-    df_processed[    'interest_income_to_assets'] =  df_processed[    'interest_income']  / df_processed['total_assets']
-    df_processed[    'interest_expense_to_assets'] = df_processed[    'interest_expense'] / df_processed['total_assets']
-    df_processed['non_interest_income_to_assets'] =  df_processed['non_interest_income']  / df_processed['total_assets']
-    df_processed['non_interest_expense_to_assets'] = df_processed['non_interest_expense'] / df_processed['total_assets']
-    df_processed['net_charge_offs_to_loans_and_leases'] = df_processed['net_charge_offs'] / df_processed['total_loans_and_leases']
-    df_processed['npl_ratio'] = df_processed['npl'] / df_processed['total_loans_and_leases']
-    df_processed['charge_off_ratio'] = df_processed['total_charge_offs'] / df_processed['total_loans_and_leases']
-    df_processed['allowance_for_loan_and_lease_losses_to_assets'] = (
-        df_processed['allowance_for_loan_and_lease_losses'] / df_processed['total_assets'])
-    df_processed['allowance_for_credit_losses_to_assets'] = (
-        df_processed['allowance_for_credit_losses'] / df_processed['total_assets'])
-    df_processed['provisions_for_credit_losses_to_assets'] = (
-        df_processed['provisions_for_credit_losses'] / df_processed['total_assets'])
-    df_processed['rwa_ratio'] = df_processed['total_rwa'] / df_processed['total_assets']
+    df2['deposit_ratio'] = df2['total_deposits'] / df2['total_assets']
+    df2['loan_to_deposit_ratio'] = df2['total_loans_and_leases'] / df2['total_deposits']
+    df2['loan_to_asset_ratio'] = df2['total_loans_and_leases'] / df2['total_assets']
+    df2['equity_to_asset_ratio'] = df2['total_equity'] / df2['total_assets']
+    df2['trading_assets_ratio'] = df2['trading_assets'] / df2['total_assets']
+    df2['net_interest_margin'] = (
+        df2['interest_income'] - df2['interest_expense']
+    ) / df2['total_assets']
+    df2['roe'] = df2['net_income'] / df2['total_equity']
+    df2['roa'] = df2['net_income'] / df2['total_assets']
+    df2[         'net_income_to_assets'] =  df2[         'net_income']  / df2['total_assets']
+    df2['net_interest_income_to_assets'] =  df2['net_interest_income']  / df2['total_assets']
+    df2[    'interest_income_to_assets'] =  df2[    'interest_income']  / df2['total_assets']
+    df2[    'interest_expense_to_assets'] = df2[    'interest_expense'] / df2['total_assets']
+    df2['non_interest_income_to_assets'] =  df2['non_interest_income']  / df2['total_assets']
+    df2['non_interest_expense_to_assets'] = df2['non_interest_expense'] / df2['total_assets']
+    df2['net_charge_offs_to_loans_and_leases'] = df2['net_charge_offs'] / df2['total_loans_and_leases']
+    df2['npl_ratio'] = df2['npl'] / df2['total_loans_and_leases']
+    df2['charge_off_ratio'] = df2['total_charge_offs'] / df2['total_loans_and_leases']
+    df2['allowance_for_loan_and_lease_losses_to_assets'] = (
+        df2['allowance_for_loan_and_lease_losses'] / df2['total_assets'])
+    df2['allowance_for_credit_losses_to_assets'] = (
+        df2['allowance_for_credit_losses'] / df2['total_assets'])
+    df2['provisions_for_credit_losses_to_assets'] = (
+        df2['provisions_for_credit_losses'] / df2['total_assets'])
+    df2['rwa_ratio'] = df2['total_rwa'] / df2['total_assets']
+    df2['dep_small_3m_less_to_assets'] = df2['dep_small_3m_less'] / df2['total_assets']
+    df2['dep_small_3m_1y_to_assets']   = df2['dep_small_3m_1y']   / df2['total_assets']
+    df2['dep_small_1y_3y_to_assets']   = df2['dep_small_1y_3y']   / df2['total_assets']
+    df2['dep_small_3y_more_to_assets'] = df2['dep_small_3y_more'] / df2['total_assets']
+    df2['dep_large_3m_less_to_assets'] = df2['dep_large_3m_less'] / df2['total_assets']
+    df2['dep_large_3m_1y_to_assets']   = df2['dep_large_3m_1y']   / df2['total_assets']
+    df2['dep_large_1y_3y_to_assets']   = df2['dep_large_1y_3y']   / df2['total_assets']
+    df2['dep_large_3y_more_to_assets'] = df2['dep_large_3y_more'] / df2['total_assets']
+
+
 
     # Log total assets
-    df_processed['log_total_assets'] = np.log(df_processed['total_assets'].replace(0, np.nan).fillna(1e-9))
+    df2['log_total_assets'] = np.log(df2['total_assets'].replace(0, np.nan).fillna(1e-9))
 
     ratio_cols = [
         'deposit_ratio', 'loan_to_deposit_ratio', 'loan_to_asset_ratio',
@@ -103,11 +115,11 @@ def calculate_financial_ratios(df):
         'roe', 'roa', 'npl_ratio', 'charge_off_ratio', 'rwa_ratio', 'log_total_assets'
     ]
     for col in ratio_cols:
-        if col in df_processed.columns:
-            df_processed[col] = df_processed[col].replace([np.inf, -np.inf], np.nan)
+        if col in df2.columns:
+            df2[col] = df2[col].replace([np.inf, -np.inf], np.nan)
 
     print("Financial ratios calculated.")
-    return df_processed
+    return df2
 
 data_selected = calculate_financial_ratios(data_selected)
 

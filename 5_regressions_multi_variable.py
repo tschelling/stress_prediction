@@ -37,20 +37,18 @@ from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error # 
 warnings.filterwarnings('ignore')
 
 # These global variables are used elsewhere in the script (plotting, main loops, artifact naming, etc.)
-TARGET_VARIABLE = 'interest_expense_to_assets'
+# TARGET_VARIABLE = 'interest_income_to_assets' # Replaced by TARGET_VARIABLES_LIST
+TARGET_VARIABLES_LIST = [
+    'interest_income_to_assets',
+    'non_interest_income_to_assets', 
+    'interest_expense_to_assets',
+    'non_interest_expense_to_assets',
+    'charge_off_ratio',
+] # Define multiple target variables here
 FEATURE_VARIABLES = ['gdp_qoq', 'deposit_ratio', 'loan_to_asset_ratio', 'log_total_assets', 'cpi_qoq', 'unemployment', 
                      'household_delinq', 'tbill_3m', 'tbill_10y', 'spread_10y_3m', 'sp500_qoq', 
-                     'corp_bond_spread', 'vix_qoq', 
-                     'dep_small_3m_less_to_assets',
-                     'dep_small_3m_1y_to_assets',
-                     'dep_small_1y_3y_to_assets',
-                     'dep_small_3y_more_to_assets',
-                     'dep_large_3m_less_to_assets',
-                     'dep_large_3m_1y_to_assets', 
-                     'dep_large_1y_3y_to_assets',
-                     'dep_large_3y_more_to_assets'
-                     ]
-MODELS_TO_RUN = ["XGBoost", "DecisionTree","LinearRegression", "Lasso", "DummyRegressor"] # Options: None (all models), or a list of model names, e.g., ["XGBoost", "Ridge", "NeuralNetwork"]
+                     'corp_bond_spread', 'vix_qoq'] # Added more macro vars
+MODELS_TO_RUN = ["XGBoost", "DecisionTree", "LinearRegression", "Lasso", "Ridge", "ElasticNet"] # Options: None (all models), or a list of model names, e.g., ["XGBoost", "Ridge", "NeuralNetwork"]
 # MODELS_TO_RUN = ["XGBoost", "Ridge", "NeuralNetwork", "DummyRegressor"] # Example: run only these
 # MODELS_TO_RUN = ["XGBoost"] # Example: run only XGBoost
 
@@ -68,7 +66,7 @@ if tf.config.list_physical_devices('GPU'):
 
 # Training parameters
 USE_RANDOM_SEARCH_CV = True 
-N_ITER_RANDOM_SEARCH = 100
+N_ITER_RANDOM_SEARCH = 20   
  
 # Artifact Storage
 SAVE_ARTIFACTS = True
@@ -77,17 +75,18 @@ ARTIFACTS_BASE_DIR = "model_run_artifacts_test3"
 # Display
 PLOT_RESULT_CHARTS = False
 PRINT_FINAL_SUMMARY = True
+PLOT_PREDICTIONS_VS_ACTUALS = False # New flag to control predictions vs actuals plot
 
 c = {
-    'TARGET_VARIABLE': TARGET_VARIABLE,                 
+    'TARGET_VARIABLE': None, # Will be set in the loop for each target
     'FEATURE_VARIABLES': FEATURE_VARIABLES,             
-    'INCLUDE_TIME_FE': True,                           
+    'INCLUDE_TIME_FE': False,                           
     'INCLUDE_BANK_FE': False,                            
     'OUTLIER_THRESHOLD_TARGET': 3.0,                    
     'MIN_OBS_PER_BANK': 10,                             
-    'DATA_BEGIN': '2017-01-01',                              
+    'DATA_BEGIN': None,                                 
     'DATA_END': None,                                  
-    'RESTRICT_TO_NUMBER_OF_BANKS': 500,                 
+    'RESTRICT_TO_NUMBER_OF_BANKS': 100,                 
     'RESTRICT_TO_BANK_SIZE': None,                      
     'RESTRICT_TO_MINIMAL_DEPOSIT_RATIO': None,          
     'RESTRICT_TO_MAX_CHANGE_IN_DEPOSIT_RATIO': None,     
@@ -225,8 +224,8 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
                 'n_estimators': randint(10, 151),
                 'learning_rate': uniform(0.01, 0.3 - 0.01),
                 'max_depth': randint(3, 12),
-                'subsample': uniform(0.2, 1.0 - 0.2),
-                'colsample_bytree': uniform(0.2, 1.0 - 0.2),
+                'subsample': uniform(0.6, 1.0 - 0.6),
+                'colsample_bytree': uniform(0.6, 1.0 - 0.6),
             },
             "NeuralNetwork": {
                 'model__hidden_layers': randint(1, 5), # 1 to 4 hidden layers
@@ -406,25 +405,6 @@ def _calculate_metrics(y_true: pd.Series, predictions: np.ndarray) -> dict:
 
 
 #--------------------------------------------------------------------------------------------------------------------
-#region Load and Initial Prepare
-#--------------------------------------------------------------------------------------------------------------------
-print("--- Loading Data ---")
-data_precleaning = pd.read_parquet('data.parquet')
-print(f"Raw data loaded. Shape: {data_precleaning.shape}")
-
-# Configuration dictionary for RegressionDataPreparer
-# Values that were previously global variables specific to data prep are now defined here.
-
-
-data_preparer = RegressionDataPreparer(initial_df=data_precleaning, config=c)
-
-if data_preparer.base_data_for_horizons is None or data_preparer.base_data_for_horizons.empty:
-    raise ValueError("Base data preparation resulted in an empty DataFrame. Halting execution.")
-
-all_data_prepared = data_preparer.base_data_for_horizons # For plotting or direct inspection if needed
-#endregion
-
-#--------------------------------------------------------------------------------------------------------------------
 #region Run regressions
 #--------------------------------------------------------------------------------------------------------------------
 
@@ -544,43 +524,48 @@ def aggregate_and_display_results(results_store: dict, plot_result_charts: bool 
     print("\n\n--- Final Model Performance Summary ---")
     summary_entries = []
     train_test_rmse_entries = []
-    for horizon, models_results in results_store.items():
-        for model_name, metrics in models_results.items():
-            if isinstance(metrics, dict):
-                rmse_test_val = metrics.get('RMSE', np.nan)
-                rmse_train_val = metrics.get('RMSE_train', np.nan)
-                summary_entries.append({
-                    'Horizon': horizon,
-                    'Model': model_name,
-                    'MAE': metrics.get('MAE', np.nan),
-                    'RMSE': rmse_test_val,
-                    'R2': metrics.get('R2', np.nan),
-                    'MAPE': metrics.get('MAPE', np.nan)
-                })
-                train_test_rmse_entries.append({
-                    'Horizon': horizon,
-                    'Model': model_name,
-                    'RMSE_Train': rmse_train_val,
-                    'RMSE_Test': rmse_test_val
-                })
-            else: 
-                 summary_entries.append({
-                    'Horizon': horizon,
-                    'Model': model_name, 
-                    'MAE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan
-                })
-                 train_test_rmse_entries.append({
-                    'Horizon': horizon,
-                    'Model': model_name,
-                    'RMSE_Train': np.nan,
-                    'RMSE_Test': np.nan
-                })
+    for target_var, target_results in results_store.items():
+        for horizon, models_results in target_results.items():
+            for model_name, metrics in models_results.items():
+                if isinstance(metrics, dict):
+                    rmse_test_val = metrics.get('RMSE', np.nan)
+                    rmse_train_val = metrics.get('RMSE_train', np.nan)
+                    summary_entries.append({
+                        'TargetVariable': target_var, # Added TargetVariable
+                        'Horizon': horizon,
+                        'Model': model_name,
+                        'MAE': metrics.get('MAE', np.nan),
+                        'RMSE': rmse_test_val,
+                        'R2': metrics.get('R2', np.nan),
+                        'MAPE': metrics.get('MAPE', np.nan)
+                    })
+                    train_test_rmse_entries.append({
+                        'TargetVariable': target_var, # Added TargetVariable
+                        'Horizon': horizon,
+                        'Model': model_name,
+                        'RMSE_Train': rmse_train_val,
+                        'RMSE_Test': rmse_test_val
+                    })
+                else: 
+                     summary_entries.append({
+                        'TargetVariable': target_var, # Added TargetVariable
+                        'Horizon': horizon,
+                        'Model': model_name, 
+                        'MAE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan
+                    })
+                     train_test_rmse_entries.append({
+                        'TargetVariable': target_var, # Added TargetVariable
+                        'Horizon': horizon,
+                        'Model': model_name,
+                        'RMSE_Train': np.nan,
+                        'RMSE_Test': np.nan
+                    })
     if not summary_entries:
         print("No results to display. Check for errors during model training or evaluation.")
         return pd.DataFrame() 
     summary_df = pd.DataFrame(summary_entries)
     # Ensure RMSE is numeric before sorting
-    summary_df = summary_df.sort_values(by=['Horizon', 'RMSE'])
+    summary_df = summary_df.sort_values(by=['TargetVariable', 'Horizon', 'RMSE']) # Added TargetVariable to sort
     if print_final_summary:
         print("\nOverall Performance Metrics (Test Set):")
         display(summary_df) 
@@ -590,10 +575,12 @@ def aggregate_and_display_results(results_store: dict, plot_result_charts: bool 
             return summary_df
         plt.figure(figsize=(14, 8))
         unique_models = summary_df['Model'].unique()
-        for model_name_plot in unique_models: 
-            model_data = summary_df[summary_df['Model'] == model_name_plot].dropna(subset=['RMSE', 'Horizon']) 
-            if not model_data.empty:
-                 plt.plot(model_data['Horizon'].astype(str), model_data['RMSE'], marker='o', linestyle='-', label=model_name_plot) 
+        unique_targets = summary_df['TargetVariable'].unique()
+        for target_name_plot in unique_targets:
+            for model_name_plot in unique_models:
+                model_data = summary_df[(summary_df['Model'] == model_name_plot) & (summary_df['TargetVariable'] == target_name_plot)].dropna(subset=['RMSE', 'Horizon'])
+                if not model_data.empty:
+                     plt.plot(model_data['Horizon'].astype(str), model_data['RMSE'], marker='o', linestyle='-', label=f"{target_name_plot} - {model_name_plot}")
         plt.xlabel("Forecast Horizon (Quarters)")
         plt.ylabel("Root Mean Squared Error (RMSE)")
         plt.title("Model RMSE vs. Forecast Horizon", fontsize=16)
@@ -603,7 +590,7 @@ def aggregate_and_display_results(results_store: dict, plot_result_charts: bool 
         plt.show()
     if train_test_rmse_entries and print_final_summary:
         train_test_rmse_df = pd.DataFrame(train_test_rmse_entries)
-        train_test_rmse_df = train_test_rmse_df.sort_values(by=['Horizon', 'RMSE_Test'])
+        train_test_rmse_df = train_test_rmse_df.sort_values(by=['TargetVariable', 'Horizon', 'RMSE_Test']) # Added TargetVariable
         print("\n\n--- Training vs. Test RMSE Comparison ---")
         display(train_test_rmse_df)
     return summary_df
@@ -644,185 +631,6 @@ def _predict_and_evaluate(fitted_model, X_train: pd.DataFrame, y_train: pd.Serie
 
 #endregion
 
-
-
-
-#--------------------------------------------------------------------------------------------------------------------
-#region Execute 
-#--------------------------------------------------------------------------------------------------------------------
-results_store = {}
-
-if SAVE_ARTIFACTS:
-    os.makedirs(ARTIFACTS_BASE_DIR, exist_ok=True)
-    print(f"Artifacts will be saved in: {os.path.abspath(ARTIFACTS_BASE_DIR)}")
-
-models_config, param_grids_config = get_models_and_param_grids(use_random_search=USE_RANDOM_SEARCH_CV, n_iter_random_search=N_ITER_RANDOM_SEARCH)
-
-# --- Iterate through each forecast horizon ---
-for i, horizon_val in enumerate(FORECAST_HORIZONS): # Use enumerate to potentially get unique run names if needed
-    print(f"\n--- Processing Horizon: {horizon_val}-quarter(s) ahead ---")
-    results_store[horizon_val] = {} 
-    
-    current_horizon_artifact_dir = ""
-    if SAVE_ARTIFACTS:
-        current_horizon_artifact_dir = os.path.join(ARTIFACTS_BASE_DIR, f"horizon_{horizon_val}")
-        os.makedirs(current_horizon_artifact_dir, exist_ok=True)
-
-    # Prepare data for the current horizon using RegressionDataPreparer
-    prepared_data = data_preparer.get_horizon_specific_data(horizon=horizon_val)
-
-    if prepared_data is None:
-        print(f"  Skipping horizon {horizon_val} due to data preparation failure.")
-        for name_model in models_config.keys():
-            results_store[horizon_val][name_model] = {'MAE': np.nan, 'MSE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan, 'RMSE_train': np.nan, 'model_object': None}
-        results_store[horizon_val]['VotingEnsemble'] = {'MAE': np.nan, 'MSE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan, 'RMSE_train': np.nan, 'model_object': None}
-        continue 
-            
-    X_train_scaled_df, X_test_scaled_df, y_train, y_test, X_train_orig, X_test_orig = prepared_data
-
-    if SAVE_ARTIFACTS:
-        data_artifact_dir = os.path.join(current_horizon_artifact_dir, "data")
-        os.makedirs(data_artifact_dir, exist_ok=True)
-        if X_train_scaled_df is not None and not X_train_scaled_df.empty:
-            X_train_scaled_df.to_parquet(os.path.join(data_artifact_dir, "X_train_scaled.parquet"))
-        if X_test_scaled_df is not None and not X_test_scaled_df.empty:
-            X_test_scaled_df.to_parquet(os.path.join(data_artifact_dir, "X_test_scaled.parquet"))
-        if y_train is not None and not y_train.empty:
-            y_train_name = y_train.name if y_train.name else TARGET_VARIABLE + f"_target_h{horizon_val}_train"
-            y_train.to_frame(name=y_train_name).to_parquet(os.path.join(data_artifact_dir, "y_train.parquet"))
-        if y_test is not None and not y_test.empty: 
-            y_test_name = y_test.name if y_test.name else TARGET_VARIABLE + f"_target_h{horizon_val}_test"
-            y_test.to_frame(name=y_test_name).to_parquet(os.path.join(data_artifact_dir, "y_test.parquet"))
-        if X_train_orig is not None and not X_train_orig.empty: 
-            X_train_orig.to_parquet(os.path.join(data_artifact_dir, "X_train_orig.parquet"))
-        if X_test_orig is not None and not X_test_orig.empty:
-            X_test_orig.to_parquet(os.path.join(data_artifact_dir, "X_test_orig.parquet"))
-
-    current_n_splits_cv = N_SPLITS_CV
-    if len(X_train_scaled_df) < current_n_splits_cv + 1 : 
-        print(f"  Warning: Training set size ({len(X_train_scaled_df)}) is too small for {current_n_splits_cv} CV splits. Reducing or skipping CV.")
-        if len(X_train_scaled_df) >= 3 and current_n_splits_cv > 1: 
-            current_n_splits_cv = max(1, int(len(X_train_scaled_df) / 2) -1) 
-            if current_n_splits_cv < 2: current_n_splits_cv = 0 
-            print(f"  Reduced CV splits to {current_n_splits_cv}.")
-        else:
-            print(f"  Skipping CV tuning for horizon {horizon_val} due to insufficient training data.")
-            current_n_splits_cv = 0 
-    tscv_splitter = TimeSeriesSplit(n_splits=current_n_splits_cv) if current_n_splits_cv >= 2 else None
-
-    # Determine which models to run based on MODELS_TO_RUN config
-    model_names_to_process_this_horizon = list(models_config.keys()) # Default to all models
-    if MODELS_TO_RUN is not None and MODELS_TO_RUN: # If a specific list is provided and it's not empty
-        model_names_to_process_this_horizon = [
-            name for name in MODELS_TO_RUN if name in models_config
-        ]
-        # Log which models are being skipped or included based on the config
-        print(f"  Configured to run only: {model_names_to_process_this_horizon}")
-        for m_name_cfg in MODELS_TO_RUN:
-            if m_name_cfg not in models_config:
-                print(f"  Warning: Model '{m_name_cfg}' in MODELS_TO_RUN is not defined in models_config and will be skipped.")
-
-    for model_name_loop in model_names_to_process_this_horizon:
-        model_instance_loop = models_config[model_name_loop]
-        print(f"  Training {model_name_loop} for horizon {horizon_val}...")
-        model_results = None 
-        if X_train_scaled_df.empty or y_train.empty:
-            print(f"    Skipping {model_name_loop} due to empty scaled training data for horizon {horizon_val}.")
-            results_store[horizon_val][model_name_loop] = {'MAE': np.nan, 'MSE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan, 'RMSE_train': np.nan, 'model_object': None}
-            continue # Skip to the next model in the loop
-
-        current_model_instance_for_training = model_instance_loop # Default to original instance
-        # Special handling for NeuralNetwork to add TensorBoard callback before training/tuning
-        if model_name_loop == "NeuralNetwork":
-            log_dir = os.path.join(ARTIFACTS_BASE_DIR, "tensorboard_logs", f"horizon_{horizon_val}", model_name_loop)
-            os.makedirs(log_dir, exist_ok=True)
-            tensorboard_callback = TensorBoard(log_dir=log_dir, histogram_freq=1)
-
-            # Clone the KerasRegressor instance to avoid modifying the original in models_config
-            cloned_nn_wrapper = clone(model_instance_loop) 
-            
-            # Ensure callbacks attribute exists and is a list
-            if not hasattr(cloned_nn_wrapper, 'callbacks') or cloned_nn_wrapper.callbacks is None:
-                cloned_nn_wrapper.callbacks = []
-            
-            # Make a mutable copy of existing callbacks (e.g., EarlyStopping from initial config)
-            current_callbacks = list(cloned_nn_wrapper.callbacks) 
-            
-            # Add TensorBoard callback if a TensorBoard callback isn't already there
-            if not any(isinstance(cb, TensorBoard) for cb in current_callbacks):
-                current_callbacks.append(tensorboard_callback)
-                cloned_nn_wrapper.callbacks = current_callbacks # Set the updated list back
-                print(f"    Added TensorBoard logging to: {log_dir} for {model_name_loop}")
-            
-            current_model_instance_for_training = cloned_nn_wrapper # Use the cloned and modified instance
-
-        model_results = train_evaluate_model(
-            model_name_loop, 
-            current_model_instance_for_training, # Pass the original or (for NN) cloned-and-modified instance
-            X_train_scaled_df, y_train, X_test_scaled_df, y_test,
-            param_grid=param_grids_config.get(model_name_loop), 
-            cv_splitter=tscv_splitter if param_grids_config.get(model_name_loop) and tscv_splitter else None,
-            use_random_search=USE_RANDOM_SEARCH_CV, n_iter_random_search=N_ITER_RANDOM_SEARCH
-        )
-        if model_results:
-            # Store the full results including the model_object initially
-            results_store[horizon_val][model_name_loop] = model_results 
-            
-            actual_model_object_from_training = model_results.get('model_object')
-
-            if SAVE_ARTIFACTS and actual_model_object_from_training is not None:
-                model_path = os.path.join(current_horizon_artifact_dir, f"{model_name_loop}.joblib")
-                if model_name_loop == "NeuralNetwork" and hasattr(actual_model_object_from_training, 'model_'):
-                    # Keras models should be saved using their own save method
-                    keras_save_path = os.path.join(current_horizon_artifact_dir, f"{model_name_loop}_keras_model")
-                    try:
-                        actual_model_object_from_training.model_.save(keras_save_path)
-                        print(f"    Saved Keras model for {model_name_loop} to {keras_save_path}")
-                        # Note: The KerasRegressor wrapper itself might not be joblib-pickleable.
-                        # We won't attempt to joblib.dump the wrapper here to avoid the known error.
-                    except Exception as e_keras:
-                        print(f"    Error saving Keras model for {model_name_loop}: {e_keras}")
-                    # Even if Keras saving fails, we still want to remove the unpickleable object
-                    # from results_store to allow the main results_store.joblib dump to work.
-                    # For NN, always set model_object to None in results_store for the main joblib dump.
-                    results_store[horizon_val][model_name_loop]['model_object'] = None
-                else: # For all other models, use joblib
-                    try:
-                        joblib.dump(actual_model_object_from_training, model_path)
-                        print(f"    Saved {model_name_loop} to {model_path}")
-                        # If joblib dump succeeds, the model_object REMAINS in results_store
-                    except Exception as e:
-                        print(f"    Error saving {model_name_loop} model: {e}")
-                        results_store[horizon_val][model_name_loop]['model_object'] = None # Set to None only if save fails
-        else:
-            results_store[horizon_val][model_name_loop] = {'MAE': np.nan, 'MSE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan, 'RMSE_train': np.nan, 'model_object': None}
-
-    if results_store[horizon_val] and not (X_train_scaled_df.empty or y_train.empty):
-        ensemble_results = train_evaluate_ensemble(results_store[horizon_val], X_train_scaled_df, y_train, X_test_scaled_df, y_test)
-        if ensemble_results:
-            results_store[horizon_val]['VotingEnsemble'] = ensemble_results
-            if SAVE_ARTIFACTS and ensemble_results.get('model_object') is not None:
-                model_path = os.path.join(current_horizon_artifact_dir, "VotingEnsemble.joblib")
-                try:
-                    joblib.dump(ensemble_results['model_object'], model_path)
-                    print(f"    Saved VotingEnsemble model to {model_path}")
-                except Exception as e:
-                    print(f"    Error saving VotingEnsemble model: {e}")
-                    if horizon_val in results_store and 'VotingEnsemble' in results_store[horizon_val] and isinstance(results_store[horizon_val]['VotingEnsemble'], dict):
-                        results_store[horizon_val]['VotingEnsemble']['model_object'] = None
-        else: 
-            results_store[horizon_val]['VotingEnsemble'] = {'MAE': np.nan, 'MSE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan, 'RMSE_train': np.nan, 'model_object': None}
-    else: 
-        results_store[horizon_val]['VotingEnsemble'] = {'MAE': np.nan, 'MSE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan, 'RMSE_train': np.nan, 'model_object': None}
-
-final_summary_df = aggregate_and_display_results(results_store, plot_result_charts=PLOT_RESULT_CHARTS, print_final_summary=PRINT_FINAL_SUMMARY)
-if SAVE_ARTIFACTS:
-    joblib.dump(results_store, os.path.join(ARTIFACTS_BASE_DIR, "results_store.joblib"))
-    print(f"Saved full results_store to {os.path.join(ARTIFACTS_BASE_DIR, 'results_store.joblib')}")
-    if final_summary_df is not None and not final_summary_df.empty:
-        final_summary_df.to_csv(os.path.join(ARTIFACTS_BASE_DIR, "final_summary_metrics.csv"), index=False)
-        print(f"Saved final_summary_df to {os.path.join(ARTIFACTS_BASE_DIR, 'final_summary_metrics.csv')}")
-#endregion
 
 
 
@@ -880,21 +688,209 @@ def plot_features_timeseries_flat(
     plt.tight_layout(rect=[0, 0, 0.9, 1]) 
     plt.show()
 
-if all_data_prepared is not None and not all_data_prepared.empty:
-    # Ensure TARGET_VARIABLE and other desired features for plotting are in all_data_prepared.columns
-    plot_cols = [TARGET_VARIABLE]
-    if 'log_total_assets' in all_data_prepared.columns: plot_cols.append('log_total_assets')
-    if 'deposit_ratio' in all_data_prepared.columns: plot_cols.append('deposit_ratio')
-    
-    # Filter to only existing columns to avoid errors
-    plot_cols_existing = [col for col in plot_cols if col in all_data_prepared.columns]
-    if plot_cols_existing:
-        plot_features_timeseries_flat(all_data_prepared.reset_index(), feature_columns=plot_cols_existing)
-    else:
-        print("Warning: None of the specified columns for timeseries plot exist in all_data_prepared.")
-else:
-    print("Skipping feature timeseries plot as all_data_prepared is empty or None.")
 #endregion
+
+
+#--------------------------------------------------------------------------------------------------------------------
+#region Execute 
+#--------------------------------------------------------------------------------------------------------------------
+results_store = {}
+print("--- Loading Data ---")
+data_precleaning = pd.read_parquet('data.parquet')
+print(f"Raw data loaded. Shape: {data_precleaning.shape}")
+
+
+if SAVE_ARTIFACTS:
+    os.makedirs(ARTIFACTS_BASE_DIR, exist_ok=True)
+    print(f"Artifacts will be saved in: {os.path.abspath(ARTIFACTS_BASE_DIR)}")
+
+models_config, param_grids_config = get_models_and_param_grids(use_random_search=USE_RANDOM_SEARCH_CV, n_iter_random_search=N_ITER_RANDOM_SEARCH)
+
+for current_target_variable in TARGET_VARIABLES_LIST:
+    print(f"\n\nProcessing Target Variable: {current_target_variable}")
+    results_store[current_target_variable] = {}
+    c['TARGET_VARIABLE'] = current_target_variable # Update config for DataPreparer
+
+    # Instantiate DataPreparer for the current target
+    data_preparer = RegressionDataPreparer(initial_df=data_precleaning, config=c)
+    if data_preparer.base_data_for_horizons is None or data_preparer.base_data_for_horizons.empty:
+        print(f"Base data preparation for target {current_target_variable} resulted in an empty DataFrame. Skipping this target.")
+        continue
+    
+    all_data_prepared_current_target = data_preparer.base_data_for_horizons # For plotting for this target
+
+    # --- Iterate through each forecast horizon ---
+    for i, horizon_val in enumerate(FORECAST_HORIZONS): # Use enumerate to potentially get unique run names if needed
+        print(f"\n--- Processing Horizon: {horizon_val}-quarter(s) ahead for Target: {current_target_variable} ---")
+        results_store[current_target_variable][horizon_val] = {} 
+        
+        current_target_artifact_dir = ""
+        current_horizon_artifact_dir = ""
+        if SAVE_ARTIFACTS:
+            # Sanitize target variable name for directory path
+            sanitized_target_name = current_target_variable.replace('/', '_').replace('\\', '_')
+            current_target_artifact_dir = os.path.join(ARTIFACTS_BASE_DIR, f"target_{sanitized_target_name}")
+            os.makedirs(current_target_artifact_dir, exist_ok=True)
+            current_horizon_artifact_dir = os.path.join(current_target_artifact_dir, f"horizon_{horizon_val}")
+            os.makedirs(current_horizon_artifact_dir, exist_ok=True)
+
+        # Prepare data for the current horizon using RegressionDataPreparer
+        prepared_data = data_preparer.get_horizon_specific_data(horizon=horizon_val)
+
+        if prepared_data is None:
+            print(f"  Skipping horizon {horizon_val} for target {current_target_variable} due to data preparation failure.")
+            for name_model in models_config.keys():
+                results_store[current_target_variable][horizon_val][name_model] = {'MAE': np.nan, 'MSE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan, 'RMSE_train': np.nan, 'model_object': None}
+            results_store[current_target_variable][horizon_val]['VotingEnsemble'] = {'MAE': np.nan, 'MSE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan, 'RMSE_train': np.nan, 'model_object': None}
+            continue 
+                
+        X_train_scaled_df, X_test_scaled_df, y_train, y_test, X_train_orig, X_test_orig = prepared_data
+
+        if SAVE_ARTIFACTS and current_horizon_artifact_dir:
+            data_artifact_dir = os.path.join(current_horizon_artifact_dir, "data")
+            os.makedirs(data_artifact_dir, exist_ok=True)
+            if X_train_scaled_df is not None and not X_train_scaled_df.empty:
+                X_train_scaled_df.to_parquet(os.path.join(data_artifact_dir, "X_train_scaled.parquet"))
+            if X_test_scaled_df is not None and not X_test_scaled_df.empty:
+                X_test_scaled_df.to_parquet(os.path.join(data_artifact_dir, "X_test_scaled.parquet"))
+            if y_train is not None and not y_train.empty:
+                y_train_name = y_train.name if y_train.name else f"{current_target_variable}_target_h{horizon_val}_train"
+                y_train.to_frame(name=y_train_name).to_parquet(os.path.join(data_artifact_dir, "y_train.parquet"))
+            if y_test is not None and not y_test.empty: 
+                y_test_name = y_test.name if y_test.name else f"{current_target_variable}_target_h{horizon_val}_test"
+                y_test.to_frame(name=y_test_name).to_parquet(os.path.join(data_artifact_dir, "y_test.parquet"))
+            if X_train_orig is not None and not X_train_orig.empty: 
+                X_train_orig.to_parquet(os.path.join(data_artifact_dir, "X_train_orig.parquet"))
+            if X_test_orig is not None and not X_test_orig.empty:
+                X_test_orig.to_parquet(os.path.join(data_artifact_dir, "X_test_orig.parquet"))
+
+        current_n_splits_cv = N_SPLITS_CV
+        if len(X_train_scaled_df) < current_n_splits_cv + 1 : 
+            print(f"  Warning: Training set size ({len(X_train_scaled_df)}) for target {current_target_variable}, H{horizon_val} is too small for {current_n_splits_cv} CV splits. Reducing or skipping CV.")
+            if len(X_train_scaled_df) >= 3 and current_n_splits_cv > 1: 
+                current_n_splits_cv = max(1, int(len(X_train_scaled_df) / 2) -1) 
+                if current_n_splits_cv < 2: current_n_splits_cv = 0 
+                print(f"  Reduced CV splits to {current_n_splits_cv}.")
+            else:
+                print(f"  Skipping CV tuning for target {current_target_variable}, H{horizon_val} due to insufficient training data.")
+                current_n_splits_cv = 0 
+        tscv_splitter = TimeSeriesSplit(n_splits=current_n_splits_cv) if current_n_splits_cv >= 2 else None
+
+        # Determine which models to run based on MODELS_TO_RUN config
+        model_names_to_process_this_horizon = list(models_config.keys()) # Default to all models
+        if MODELS_TO_RUN is not None and MODELS_TO_RUN: # If a specific list is provided and it's not empty
+            model_names_to_process_this_horizon = [
+                name for name in MODELS_TO_RUN if name in models_config
+            ]
+            print(f"  Configured to run only: {model_names_to_process_this_horizon} for target {current_target_variable}, H{horizon_val}")
+            for m_name_cfg in MODELS_TO_RUN:
+                if m_name_cfg not in models_config:
+                    print(f"  Warning: Model '{m_name_cfg}' in MODELS_TO_RUN is not defined in models_config and will be skipped.")
+
+        for model_name_loop in model_names_to_process_this_horizon:
+            model_instance_loop = models_config[model_name_loop]
+            print(f"  Training {model_name_loop} for target {current_target_variable}, horizon {horizon_val}...")
+            model_results = None 
+            if X_train_scaled_df.empty or y_train.empty:
+                print(f"    Skipping {model_name_loop} due to empty scaled training data for target {current_target_variable}, H{horizon_val}.")
+                results_store[current_target_variable][horizon_val][model_name_loop] = {'MAE': np.nan, 'MSE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan, 'RMSE_train': np.nan, 'model_object': None}
+                continue # Skip to the next model in the loop
+
+            current_model_instance_for_training = model_instance_loop # Default to original instance
+            # Special handling for NeuralNetwork to add TensorBoard callback before training/tuning
+            if model_name_loop == "NeuralNetwork" and SAVE_ARTIFACTS:
+                sanitized_target_name_tb = current_target_variable.replace('/', '_').replace('\\', '_')
+                log_dir = os.path.join(ARTIFACTS_BASE_DIR, "tensorboard_logs", f"target_{sanitized_target_name_tb}", f"horizon_{horizon_val}", model_name_loop)
+                os.makedirs(log_dir, exist_ok=True)
+                tensorboard_callback = TensorBoard(log_dir=log_dir, histogram_freq=1)
+
+                cloned_nn_wrapper = clone(model_instance_loop) 
+                if not hasattr(cloned_nn_wrapper, 'callbacks') or cloned_nn_wrapper.callbacks is None:
+                    cloned_nn_wrapper.callbacks = []
+                current_callbacks = list(cloned_nn_wrapper.callbacks) 
+                if not any(isinstance(cb, TensorBoard) for cb in current_callbacks):
+                    current_callbacks.append(tensorboard_callback)
+                    cloned_nn_wrapper.callbacks = current_callbacks
+                    print(f"    Added TensorBoard logging to: {log_dir} for {model_name_loop}")
+                current_model_instance_for_training = cloned_nn_wrapper
+
+            model_results = train_evaluate_model(
+                model_name_loop, 
+                current_model_instance_for_training,
+                X_train_scaled_df, y_train, X_test_scaled_df, y_test,
+                param_grid=param_grids_config.get(model_name_loop), 
+                cv_splitter=tscv_splitter if param_grids_config.get(model_name_loop) and tscv_splitter else None,
+                use_random_search=USE_RANDOM_SEARCH_CV, n_iter_random_search=N_ITER_RANDOM_SEARCH
+            )
+            if model_results:
+                results_store[current_target_variable][horizon_val][model_name_loop] = model_results 
+                actual_model_object_from_training = model_results.get('model_object')
+
+                if SAVE_ARTIFACTS and actual_model_object_from_training is not None and current_horizon_artifact_dir:
+                    model_path = os.path.join(current_horizon_artifact_dir, f"{model_name_loop}.joblib")
+                    if model_name_loop == "NeuralNetwork" and hasattr(actual_model_object_from_training, 'model_'):
+                        keras_save_path = os.path.join(current_horizon_artifact_dir, f"{model_name_loop}_keras_model")
+                        try:
+                            actual_model_object_from_training.model_.save(keras_save_path)
+                            print(f"    Saved Keras model for {model_name_loop} to {keras_save_path}")
+                        except Exception as e_keras:
+                            print(f"    Error saving Keras model for {model_name_loop}: {e_keras}")
+                        results_store[current_target_variable][horizon_val][model_name_loop]['model_object'] = None
+                    else: 
+                        try:
+                            joblib.dump(actual_model_object_from_training, model_path)
+                            print(f"    Saved {model_name_loop} to {model_path}")
+                        except Exception as e:
+                            print(f"    Error saving {model_name_loop} model: {e}")
+                            results_store[current_target_variable][horizon_val][model_name_loop]['model_object'] = None 
+            else:
+                results_store[current_target_variable][horizon_val][model_name_loop] = {'MAE': np.nan, 'MSE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan, 'RMSE_train': np.nan, 'model_object': None}
+
+        if results_store[current_target_variable][horizon_val] and not (X_train_scaled_df.empty or y_train.empty):
+            ensemble_results = train_evaluate_ensemble(results_store[current_target_variable][horizon_val], X_train_scaled_df, y_train, X_test_scaled_df, y_test)
+            if ensemble_results:
+                results_store[current_target_variable][horizon_val]['VotingEnsemble'] = ensemble_results
+                if SAVE_ARTIFACTS and ensemble_results.get('model_object') is not None and current_horizon_artifact_dir:
+                    model_path = os.path.join(current_horizon_artifact_dir, "VotingEnsemble.joblib")
+                    try:
+                        joblib.dump(ensemble_results['model_object'], model_path)
+                        print(f"    Saved VotingEnsemble model to {model_path}")
+                    except Exception as e:
+                        print(f"    Error saving VotingEnsemble model: {e}")
+                        if current_target_variable in results_store and horizon_val in results_store[current_target_variable] and \
+                           'VotingEnsemble' in results_store[current_target_variable][horizon_val] and \
+                           isinstance(results_store[current_target_variable][horizon_val]['VotingEnsemble'], dict):
+                            results_store[current_target_variable][horizon_val]['VotingEnsemble']['model_object'] = None
+            else: 
+                results_store[current_target_variable][horizon_val]['VotingEnsemble'] = {'MAE': np.nan, 'MSE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan, 'RMSE_train': np.nan, 'model_object': None}
+        else: 
+            results_store[current_target_variable][horizon_val]['VotingEnsemble'] = {'MAE': np.nan, 'MSE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan, 'RMSE_train': np.nan, 'model_object': None}
+
+    # Plot features for the current target if data is available
+    if all_data_prepared_current_target is not None and not all_data_prepared_current_target.empty:
+        print(f"\n--- Plotting features for Target: {current_target_variable} ---")
+        plot_cols = [current_target_variable] # Plot the current target variable
+        if 'log_total_assets' in all_data_prepared_current_target.columns: plot_cols.append('log_total_assets')
+        if 'deposit_ratio' in all_data_prepared_current_target.columns: plot_cols.append('deposit_ratio')
+        
+        plot_cols_existing = [col for col in plot_cols if col in all_data_prepared_current_target.columns]
+        if plot_cols_existing:
+            plot_features_timeseries_flat(all_data_prepared_current_target.reset_index(), feature_columns=plot_cols_existing)
+        else:
+            print(f"Warning: None of the specified columns for timeseries plot exist in data for target {current_target_variable}.")
+    else:
+        print(f"Skipping feature timeseries plot for target {current_target_variable} as its data is empty or None.")
+
+final_summary_df = aggregate_and_display_results(results_store, plot_result_charts=PLOT_RESULT_CHARTS, print_final_summary=PRINT_FINAL_SUMMARY)
+if SAVE_ARTIFACTS:
+    joblib.dump(results_store, os.path.join(ARTIFACTS_BASE_DIR, "results_store.joblib"))
+    print(f"Saved full results_store to {os.path.join(ARTIFACTS_BASE_DIR, 'results_store.joblib')}")
+    if final_summary_df is not None and not final_summary_df.empty:
+        final_summary_df.to_csv(os.path.join(ARTIFACTS_BASE_DIR, "final_summary_metrics.csv"), index=False)
+        print(f"Saved final_summary_df to {os.path.join(ARTIFACTS_BASE_DIR, 'final_summary_metrics.csv')}")
+#endregion
+
+
 
 
 
@@ -904,12 +900,17 @@ else:
 #--------------------------------------------------------------------------------------------------------------------
 import math # Ensure math is imported if used
 
-results_h1 = results_store.get(1, {}) 
+# Plot for the first target variable and Horizon 1
+first_target_to_plot = TARGET_VARIABLES_LIST[0] if TARGET_VARIABLES_LIST else None
+results_h1_first_target = {}
+if first_target_to_plot and first_target_to_plot in results_store:
+    results_h1_first_target = results_store[first_target_to_plot].get(1, {})
+
 X_train_scaled_df_h1, X_test_scaled_df_h1, y_train_h1, y_test_h1 = None, None, None, None
 h1_data_loaded_successfully = False
-if 1 in FORECAST_HORIZONS: 
+if first_target_to_plot and 1 in FORECAST_HORIZONS:
     if SAVE_ARTIFACTS and ARTIFACTS_BASE_DIR:
-        h1_data_dir = os.path.join(ARTIFACTS_BASE_DIR, "horizon_1", "data")
+        h1_data_dir = os.path.join(ARTIFACTS_BASE_DIR, f"target_{first_target_to_plot.replace('/', '_')}", "horizon_1", "data")
         required_files = {
             "X_train": os.path.join(h1_data_dir, "X_train_scaled.parquet"),
             "X_test": os.path.join(h1_data_dir, "X_test_scaled.parquet"),
@@ -925,25 +926,27 @@ if 1 in FORECAST_HORIZONS:
                 y_train_h1 = y_train_df_h1[y_train_df_h1.columns[0]]
                 y_test_h1 = y_test_df_h1[y_test_df_h1.columns[0]]
                 h1_data_loaded_successfully = True
-                print("Successfully loaded Horizon 1 data from artifacts for plotting.")
+                print(f"Successfully loaded Horizon 1 data for target '{first_target_to_plot}' from artifacts for plotting.")
             except Exception as e:
-                print(f"Error loading Horizon 1 data from artifacts: {e}. Plotting may be affected.")
+                print(f"Error loading Horizon 1 data for target '{first_target_to_plot}' from artifacts: {e}. Plotting may be affected.")
         else:
-            print("Warning: Not all Horizon 1 data artifacts found. Plotting may use last horizon's data or fail if it was not H1.")
+            print(f"Warning: Not all Horizon 1 data artifacts for target '{first_target_to_plot}' found. Plotting may be affected.")
+    
     if not h1_data_loaded_successfully:
-        if 'X_train_scaled_df' in locals() and isinstance(X_train_scaled_df, pd.DataFrame): 
-            X_train_scaled_df_h1 = X_train_scaled_df
-            X_test_scaled_df_h1 = X_test_scaled_df
-            y_train_h1 = y_train
-            y_test_h1 = y_test
-            print("Using data from last processed iteration for Horizon 1 plotting (fallback).")
-        else:
-            print("Error: Horizon 1 data not available for plotting. Globals not set or artifacts failed.")
+        # This fallback is tricky with multiple targets. We'd need to ensure the last processed data corresponds to H1 of the first target.
+        # For simplicity, if artifact loading fails, we might skip this plot or rely on user ensuring data is present.
+        # For now, let's assume if artifacts are not there, we don't plot.
+        print(f"Could not load Horizon 1 data for target '{first_target_to_plot}'. Fallback to last processed data not implemented for multi-target plotting here.")
+        h1_data_loaded_successfully = False # Ensure it's false if fallback isn't robustly handled
+
 models_to_plot = []
-for model_name, metrics in results_h1.items():
-    if 'model_object' in metrics and metrics['model_object'] is not None and hasattr(metrics['model_object'], 'predict'):
-        # Removed check for Prophet
+if h1_data_loaded_successfully and first_target_to_plot:
+    for model_name, metrics in results_h1_first_target.items():
+        if 'model_object' in metrics and metrics['model_object'] is not None and hasattr(metrics['model_object'], 'predict'):
             models_to_plot.append((model_name, metrics))
+else:
+    print(f"Skipping 'Estimated vs Actual' plots as data for Horizon 1 of target '{first_target_to_plot}' is not available.")
+
 if not models_to_plot:
     print("No suitable models found in results_h1 to plot, or H1 data is unavailable.")
 else:
@@ -977,6 +980,7 @@ else:
     for model_name, metrics in models_to_plot:
         ax = axes[plot_index]
         model = metrics['model_object']
+        expected_model_features = model.feature_names_in_ # Get expected features from the model
         mape = metrics.get('MAPE', float('nan'))
         empty_mi_train = pd.MultiIndex.from_tuples([], names=['id', 'date']) if y_train_h1 is None else y_train_h1.index
         empty_mi_test = pd.MultiIndex.from_tuples([], names=['id', 'date']) if y_test_h1 is None else y_test_h1.index
@@ -985,24 +989,40 @@ else:
         if X_train_scaled_df_h1 is not None and not X_train_scaled_df_h1.empty and \
            y_train_h1 is not None and not y_train_h1.empty:
             if X_train_scaled_df_h1.shape[1] > 0: 
-                raw_predictions_train = model.predict(X_train_scaled_df_h1)
+                # --- Reconcile features for X_train_scaled_df_h1 ---
+                X_train_reconciled = X_train_scaled_df_h1.copy()
+                for col in expected_model_features:
+                    if col not in X_train_reconciled.columns:
+                        X_train_reconciled[col] = 0 # Add missing feature with 0
+                # Ensure only expected features are present and in correct order
+                X_train_reconciled_aligned = X_train_reconciled[expected_model_features]
+                # --- End Reconciliation ---
+                raw_predictions_train = model.predict(X_train_reconciled_aligned) # Use reconciled data
                 predictions_train_series = pd.Series(raw_predictions_train, index=y_train_h1.index)
             else:
                 print(f"Skipping train predictions for {model_name} (H1): X_train_scaled_df_h1 has no features.")
         if X_test_scaled_df_h1 is not None and not X_test_scaled_df_h1.empty and \
            y_test_h1 is not None and not y_test_h1.empty:
             if X_test_scaled_df_h1.shape[1] > 0: 
-                raw_predictions_test = model.predict(X_test_scaled_df_h1)
+                # --- Reconcile features for X_test_scaled_df_h1 ---
+                X_test_reconciled = X_test_scaled_df_h1.copy()
+                for col in expected_model_features:
+                    if col not in X_test_reconciled.columns:
+                        X_test_reconciled[col] = 0 # Add missing feature with 0
+                # Ensure only expected features are present and in correct order
+                X_test_reconciled_aligned = X_test_reconciled[expected_model_features]
+                # --- End Reconciliation ---
+                raw_predictions_test = model.predict(X_test_reconciled_aligned) # Use reconciled data
                 predictions_test_series = pd.Series(raw_predictions_test, index=y_test_h1.index)
             else:
                 print(f"Skipping test predictions for {model_name} (H1): X_test_scaled_df_h1 has no features.")
-        plot_aggregated_timeseries(ax, y_train_h1, 'Actual Train', 'blue')
-        plot_aggregated_timeseries(ax, predictions_train_series, 'Predicted Train', 'orange', line_style='--')
-        plot_aggregated_timeseries(ax, y_test_h1, 'Actual Test', 'green')
-        plot_aggregated_timeseries(ax, predictions_test_series, 'Predicted Test', 'red', line_style='--')
-        ax.set_title(f'{model_name} (H=1) (MAPE: {mape:.2f}%)', fontsize=10)
+        plot_aggregated_timeseries(ax, y_train_h1, 'Actual Train', 'blue') # Pass y_train_h1
+        plot_aggregated_timeseries(ax, predictions_train_series, 'Predicted Train', 'orange', line_style='--') # Pass predictions_train_series
+        plot_aggregated_timeseries(ax, y_test_h1, 'Actual Test', 'green') # Pass y_test_h1
+        plot_aggregated_timeseries(ax, predictions_test_series, 'Predicted Test', 'red', line_style='--') # Pass predictions_test_series
+        ax.set_title(f'{model_name} ({first_target_to_plot}, H=1) (MAPE: {mape:.2f}%)', fontsize=10)
         ax.set_xlabel('Date', fontsize=8)
-        ax.set_ylabel(TARGET_VARIABLE, fontsize=8)
+        ax.set_ylabel(first_target_to_plot, fontsize=8) # Use the specific target for y-label
         if (y_train_h1 is not None and not y_train_h1.empty) or \
            (y_test_h1 is not None and not y_test_h1.empty):
             ax.xaxis.set_major_formatter(plt.matplotlib.dates.DateFormatter('%Y-%m'))
@@ -1012,7 +1032,7 @@ else:
         ax.grid(True, linestyle='--', alpha=0.7)
         plot_index += 1
     for i in range(plot_index, len(axes)): fig.delaxes(axes[i])
-    plt.tight_layout(pad=2.0)
+    plt.tight_layout(pad=2.0, rect=[0, 0, 1, 0.96]) # Adjust rect for suptitle
     fig.suptitle("Model Predictions vs Actuals (Horizon 1 - Mean and IQR over Banks)", fontsize=16, y=0.995)
     plt.show()
 #endregion
@@ -1023,10 +1043,15 @@ else:
 #--------------------------------------------------------------------------------------------------------------------
 #region Feature importance plotting
 #--------------------------------------------------------------------------------------------------------------------
-def plot_feature_importance(model, feature_names, ax=None, top_n=10):
+def plot_feature_importance(model, feature_names, ax=None, top_n=10, r2_score=None):
     """Plots feature importance for tree-based models or coefficients for linear models."""
     if ax is None:
         fig_fi, ax = plt.subplots(figsize=(10, 6)) # Renamed fig to fig_fi
+    
+    title_suffix = ""
+    if r2_score is not None and not np.isnan(r2_score):
+        title_suffix = f" (R²: {r2_score:.2f})"
+
     if hasattr(model, 'feature_importances_'):
         importances = model.feature_importances_
         indices = np.argsort(importances)[::-1] 
@@ -1036,7 +1061,7 @@ def plot_feature_importance(model, feature_names, ax=None, top_n=10):
         ax.bar(range(len(top_importances)), top_importances, align='center')
         ax.set_xticks(range(len(top_importances)))
         ax.set_xticklabels(top_feature_names, rotation=45, ha='right')
-        ax.set_title('Feature Importances')
+        ax.set_title(f'Feature Importances{title_suffix}')
     elif hasattr(model, 'coef_'):
         coef = model.coef_
         indices = np.argsort(np.abs(coef))[::-1]  
@@ -1046,27 +1071,33 @@ def plot_feature_importance(model, feature_names, ax=None, top_n=10):
         ax.bar(range(len(top_coef)), top_coef, align='center')
         ax.set_xticks(range(len(top_coef)))
         ax.set_xticklabels(top_feature_names, rotation=45, ha='right')
-        ax.set_title('Feature Coefficients')
+        ax.set_title(f'Feature Coefficients{title_suffix}')
     ax.set_ylabel('Importance / Coefficient Value')
     plt.tight_layout()
     # plt.show() # Removed to allow fig_fi to be shown if ax is None initially
 
-# Use X_train_scaled_df_h1 for feature names
-if 1 in results_store and \
-   'XGBoost' in results_store[1] and \
-   results_store[1].get('XGBoost') and \
-   results_store[1]['XGBoost'].get('model_object') is not None and \
-   X_train_scaled_df_h1 is not None and not X_train_scaled_df_h1.empty:
-    model_to_plot_fi = results_store[1]['XGBoost']['model_object']
-    actual_feature_names = X_train_scaled_df_h1.columns.tolist()
-    fig_fi_main, ax_fi_main = plt.subplots(figsize=(10,6)) # Create fig and ax here
-    plot_feature_importance(
-        model_to_plot_fi,
-        actual_feature_names,
-        ax=ax_fi_main, 
-        top_n=10 
-    )
-    plt.show() # Show the plot after calling the function
+# Plot feature importance for the first target, H1, XGBoost model
+if first_target_to_plot and \
+   h1_data_loaded_successfully and \
+   X_train_scaled_df_h1 is not None and not X_train_scaled_df_h1.empty and \
+   first_target_to_plot in results_store and \
+   1 in results_store[first_target_to_plot] and \
+   'XGBoost' in results_store[first_target_to_plot][1]:
+    
+    xgb_results_h1_first_target = results_store[first_target_to_plot][1].get('XGBoost')
+    if xgb_results_h1_first_target and xgb_results_h1_first_target.get('model_object') is not None:
+        model_to_plot_fi = xgb_results_h1_first_target['model_object']
+        r2_value = xgb_results_h1_first_target.get('R2', np.nan)
+        actual_feature_names = X_train_scaled_df_h1.columns.tolist()
+        fig_fi_main, ax_fi_main = plt.subplots(figsize=(10,6))
+        plot_feature_importance(
+            model_to_plot_fi,
+            actual_feature_names,
+            ax=ax_fi_main, 
+            top_n=10,
+            r2_score=r2_value
+        )
+        plt.show()
 else:
-    print("Could not plot feature importance for XGBoost (H=1): Model, its training data, or feature names not available.")
+    print(f"Could not plot feature importance for XGBoost (Target: {first_target_to_plot}, H=1): Model, its training data, or feature names not available.")
 #endregion
