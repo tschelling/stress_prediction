@@ -3,7 +3,7 @@ import numpy as np
 import warnings
 import matplotlib.pyplot as plt
 import seaborn as sns # Make sure seaborn is imported if used in plot_features_timeseries_flat
-from typing import List # For type hinting in plot_features_timeseries_flat
+from typing import List, Dict, Any # For type hinting
 from sklearn.model_selection import TimeSeriesSplit, GridSearchCV, RandomizedSearchCV
 from sklearn.ensemble import VotingRegressor
 from xgboost import XGBRegressor
@@ -18,6 +18,7 @@ from keras.models import Sequential # type: ignore
 from keras.layers import Dense, Dropout
 from keras.optimizers import Adam, RMSprop
 from keras.regularizers import l1_l2
+from sklearn.ensemble import RandomForestRegressor # Added for RandomForest
 from keras.callbacks import EarlyStopping, TensorBoard # Import TensorBoard
 from scikeras.wrappers import KerasRegressor
 
@@ -50,7 +51,7 @@ FEATURE_VARIABLES = ['gdp_qoq', 'deposit_ratio', 'loan_to_asset_ratio', 'log_tot
                      'dep_large_1y_3y_to_assets',
                      'dep_large_3y_more_to_assets'
                      ]
-MODELS_TO_RUN = ["XGBoost", "DecisionTree","LinearRegression", "Lasso", "DummyRegressor"] # Options: None (all models), or a list of model names, e.g., ["XGBoost", "Ridge", "NeuralNetwork"]
+MODELS_TO_RUN = ["XGBoost", "DecisionTree","LinearRegression", "Lasso", "DummyRegressor", "RandomForest"] # Options: None (all models), or a list of model names, e.g., ["XGBoost", "Ridge", "NeuralNetwork"]
 # MODELS_TO_RUN = ["XGBoost", "Ridge", "NeuralNetwork", "DummyRegressor"] # Example: run only these
 # MODELS_TO_RUN = ["XGBoost"] # Example: run only XGBoost
 
@@ -186,8 +187,11 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
         "Ridge": Ridge(random_state=42, max_iter=15000),
         "ElasticNet": ElasticNet(random_state=42, max_iter=15000),
         "DecisionTree": DecisionTreeRegressor(random_state=42),
-        "XGBoost": XGBRegressor(random_state=42, objective='reg:squarederror', n_jobs=-1, tree_method='hist', # Removed enable_categorical
-                                early_stopping_rounds=None),
+        "XGBoost": XGBRegressor(random_state=42, objective='reg:squarederror', n_jobs=-1, tree_method='hist'), # Removed enable_categorical
+        "RandomForest": RandomForestRegressor(
+            random_state=42, 
+            n_jobs=-1 # Added RandomForest
+            ),
         "FixedEffectsLR": LinearRegression(),
         "NeuralNetwork": KerasRegressor(
             model=create_nn_model,
@@ -228,6 +232,12 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
                 'subsample': uniform(0.2, 1.0 - 0.2),
                 'colsample_bytree': uniform(0.2, 1.0 - 0.2),
             },
+            "RandomForest": {
+                'n_estimators': randint(10, 201), # e.g., 10 to 200 trees
+                'max_depth': [None] + list(range(5, 31)), # Or randint(5, 31)
+                'min_samples_split': randint(2, 21),
+                'min_samples_leaf': randint(1, 11)
+            },
             "NeuralNetwork": {
                 'model__hidden_layers': randint(1, 5), # 1 to 4 hidden layers
                 'model__neurons_per_layer': randint(32, 257), # Neurons from 32 to 256
@@ -254,6 +264,12 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
                 'n_estimators': [20, 30, 35, 40, 45, 50, 100],
                 'learning_rate': [0.01, 0.03, 0.05, 0.06, 0.07, 0.08, 0.1, 0.2],
                 'max_depth': [3, 5, 7, 9, 11],
+            },
+            "RandomForest": { # Example for GridSearchCV
+                'n_estimators': [50, 100, 150],
+                'max_depth': [None, 10, 20],
+                'min_samples_split': [2, 5, 10],
+                'min_samples_leaf': [1, 2, 4]
             },
             "NeuralNetwork": { # Example for GridSearchCV, usually too slow for NNs
                 'model__hidden_layers': [1, 2],
