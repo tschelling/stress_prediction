@@ -35,6 +35,7 @@ from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error # 
 #--------------------------------------------------------------------------------------------------------------------
 
 warnings.filterwarnings('ignore')
+tf.get_logger().setLevel('ERROR')# Suppress TensorFlow INFO and WARNING messages for cleaner output
 
 # These global variables are used elsewhere in the script (plotting, main loops, artifact naming, etc.)
 # TARGET_VARIABLE = 'interest_income_to_assets' # Replaced by TARGET_VARIABLES_LIST
@@ -48,34 +49,12 @@ TARGET_VARIABLES_LIST = [
 FEATURE_VARIABLES = ['gdp_qoq', 'deposit_ratio', 'loan_to_asset_ratio', 'log_total_assets', 'cpi_qoq', 'unemployment', 
                      'household_delinq', 'tbill_3m', 'tbill_10y', 'spread_10y_3m', 'sp500_qoq', 
                      'corp_bond_spread', 'vix_qoq'] # Added more macro vars
-MODELS_TO_RUN = ["XGBoost", "DecisionTree", "LinearRegression", "Lasso", "Ridge", "ElasticNet"] # Options: None (all models), or a list of model names, e.g., ["XGBoost", "Ridge", "NeuralNetwork"]
-# MODELS_TO_RUN = ["XGBoost", "Ridge", "NeuralNetwork", "DummyRegressor"] # Example: run only these
-# MODELS_TO_RUN = ["XGBoost"] # Example: run only XGBoost
+MODELS_TO_RUN = ["LinearRegression", "DummyRegressor", "XGBoost", "RandomForest", "DecisionTree", "Lasso", "Ridge", "ElasticNet"] # Options: None (all models), or a list of model names, e.g., ["XGBoost", "Ridge", "NeuralNetwork"]
+# MODELS_TO_RUN = ["LinearRegression", "DummyRegressor", "XGBoost", "RandomForest", "DecisionTree" "Lasso", "Ridge", "ElasticNet", "NeuralNetwork"]
+
 
 FORECAST_HORIZONS = list(range(1, 2))
 N_SPLITS_CV = 3
-
-# Suppress TensorFlow INFO and WARNING messages for cleaner output
-tf.get_logger().setLevel('ERROR')
-
-# Enable Mixed Precision for TensorFlow on compatible GPUs (like M4 Metal)
-if tf.config.list_physical_devices('GPU'):
-    policy = keras.mixed_precision.Policy('mixed_float16')
-    keras.mixed_precision.set_global_policy(policy)
-    print("TensorFlow Mixed Precision policy set to 'mixed_float16'.")
-
-# Training parameters
-USE_RANDOM_SEARCH_CV = True 
-N_ITER_RANDOM_SEARCH = 20   
- 
-# Artifact Storage
-SAVE_ARTIFACTS = True
-ARTIFACTS_BASE_DIR = "model_run_artifacts_test3"
-
-# Display
-PLOT_RESULT_CHARTS = False
-PRINT_FINAL_SUMMARY = True
-PLOT_PREDICTIONS_VS_ACTUALS = False # New flag to control predictions vs actuals plot
 
 c = {
     'TARGET_VARIABLE': None, # Will be set in the loop for each target
@@ -95,6 +74,25 @@ c = {
     'TRAIN_TEST_SPLIT_DIMENSION': 'date',               
     'TEST_SPLIT': 0.2                                  # Takes a number or a date in the format 'YYYY-MM-DD'
 }
+
+# Training parameters
+USE_RANDOM_SEARCH_CV = True 
+N_ITER_RANDOM_SEARCH = 20   
+ 
+# Artifact Storage
+SAVE_ARTIFACTS = True
+ARTIFACTS_BASE_DIR = "model_run_artifacts_test3"
+
+# Display
+PLOT_RESULT_CHARTS = False
+PRINT_FINAL_SUMMARY = True
+PLOT_PREDICTIONS_VS_ACTUALS = False # New flag to control predictions vs actuals plot
+
+# Enable Mixed Precision for TensorFlow on compatible GPUs (like M4 Metal)
+if tf.config.list_physical_devices('GPU'):
+    policy = keras.mixed_precision.Policy('mixed_float16')
+    keras.mixed_precision.set_global_policy(policy)
+    print("TensorFlow Mixed Precision policy set to 'mixed_float16'.")
 
 # Helper function to create Neural Network model for KerasRegressor
 def create_nn_model(**kwargs): # Add use_batch_norm
@@ -499,7 +497,10 @@ def train_evaluate_ensemble(trained_models_dict, X_train_scaled, y_train, X_test
         return None
     try:
         voting_reg = VotingRegressor(estimators=estimators, n_jobs=-1)
-        voting_reg.fit(X_train_scaled, y_train)
+        # Ensure data is writeable to avoid "cannot set WRITEABLE flag" error
+        X_train_copy = X_train_scaled.copy()
+        y_train_copy = y_train.copy()
+        voting_reg.fit(X_train_copy, y_train_copy)
         predictions_test = voting_reg.predict(X_test_scaled)
         rmse_train_ensemble = np.nan
         if not X_train_scaled.empty and len(X_train_scaled) > 0:

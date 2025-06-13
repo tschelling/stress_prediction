@@ -453,6 +453,7 @@ print(selected_df.info())
 #endregion
 
 
+
 # ----------------------------------------------------------------------------------------
 #region Some housekeeping
 # ----------------------------------------------------------------------------------------
@@ -469,9 +470,56 @@ selected_df2 = selected_df[selected_df['id'].str.isnumeric()].copy()
 print(f"Deleted {len(selected_df) - len(selected_df2)} rows with non-numeric IDs.")
 x = selected_df[~selected_df['id'].isin(selected_df2['id'])].copy()
 selected_df = selected_df2.copy()
-selected_df2 = None  # Free memory
+
+
+# Deduplicate selected_df by 'id' and 'date', keeping the first occurrence
+selected_df = selected_df.drop_duplicates(subset=['id', 'date'], keep='first')
+print(f"Removed {len(selected_df2) - len(selected_df)} duplicate rows based on 'id' and 'date'.")
+# Display the shape of the DataFrame after deduplication
+
 #endregion
 
+
+
+# ----------------------------------------------------------------------------------------
+#region Load and merge failed bank list
+# ----------------------------------------------------------------------------------------
+# Import failed bank list csv file
+failed_banks_path = os.path.join(script_dir, 'failed_bank_list.csv')
+failed_banks = pd.read_csv(failed_banks_path, parse_dates=['FAILDATE'])[['FAILDATE', 'NAME']]
+failed_banks = failed_banks.rename(columns={'FAILDATE': 'date', 'NAME': 'bank_name2'})
+# Convert 'date' to quarterly timestamp format 
+failed_banks['date'] = pd.to_datetime(failed_banks['date']).dt.to_period('Q').dt.to_timestamp()
+failed_banks['failed'] = 1  # Add a column to indicate failure
+
+# Merge the failed banks with the selected_df on bank_name and date, non-case sensitive
+# Convert bank_name to lowercase for case-insensitive merge
+selected_df['bank_name2'] = selected_df['bank_name'].str.lower()
+failed_banks['bank_name2'] = failed_banks['bank_name2'].str.lower()
+# Delete all whitespace from bank_name in both DataFrames
+selected_df['bank_name2'] = selected_df['bank_name2'].str.replace(r'\s+', '', regex=True)
+failed_banks['bank_name2'] = failed_banks['bank_name2'].str.replace(r'\s+', '', regex=True)
+
+
+# Deduplicate failed_banks by 'bank_name' and 'date', keeping the last occurrence
+failed_banks = failed_banks.drop_duplicates(subset=['bank_name2', 'date'], keep='last')
+
+# Merge the DataFrames on 'bank_name' and 'date', using left join to keep all selected_df rows
+selected_df = pd.merge(selected_df, failed_banks, on=['bank_name2', 'date'], how='left')
+selected_df.drop(columns=['bank_name2'], inplace=True)  # Drop the temporary column used for merging
+
+# Check how many banks from failed_banks are in merged_df
+num_failed_banks_in_df = selected_df['failed'].notna().sum()
+
+# Check which banks from failed_banks are not in merged_df
+failed_banks_not_in_df = failed_banks[~failed_banks['bank_name2'].isin(selected_df['bank_name'])]
+print(f"Number of failed banks in merged_df: {num_failed_banks_in_df}")
+print(f"Number of failed banks not in merged_df: {len(failed_banks_not_in_df)}")
+
+# Check how many ids in merged_df have more than one failed bank entry
+multiple_failures = selected_df.groupby('id')['failed'].sum().reset_index()
+multiple_failures = multiple_failures[multiple_failures['failed'] > 1]
+print(f"Number of ids with multiple failed banks: {len(multiple_failures)}")
 
 # ----------------------------------------------------------------------------------------
 #region Calculations
