@@ -12,7 +12,7 @@ from xgboost import XGBRegressor
 import joblib
 import os
 from IPython.display import display
-import math
+# import math # No longer used directly in this script for plotting
 
 # Added for Neural Network
 import tensorflow as tf
@@ -44,12 +44,12 @@ tf.get_logger().setLevel('ERROR') # Suppress TensorFlow INFO and WARNING message
 
 # --- Data & Model Configuration ---
 
-TARGET_VARIABLES = {'interest_income_to_assets':'bank', 'interest_expense_to_assets':'bank'}
-                   #'non_interest_income_to_assets':'bank', 'non_interest_expense_to_assets':'bank',
-                   #'net_charge_offs_to_loans_and_leases':'bank'}
+TARGET_VARIABLES = {'interest_income_to_assets':'bank', 'interest_expense_to_assets':'bank',
+                   'non_interest_income_to_assets':'bank', 'non_interest_expense_to_assets':'bank',
+                   'net_charge_offs_to_loans_and_leases':'bank'}
 FEATURE_VARIABLES = {'deposit_ratio':'bank', 'loan_to_asset_ratio':'bank', 'log_total_assets':'bank', 
                      'cpi_qoq':'macro',      'gdp_qoq':'macro',     'unemployment':'macro', 'household_delinq':'macro', 
-                     'tbill_3m':'macro',     'tbill_10y':'macro',   'spread_10y_3m':'macro', 'sp500_qoq':'macro',
+                     'tbill_3m':'macro',     'tbill_10y':'macro', 'sp500_qoq':'macro',
                      'corp_bond_spread':'macro', 'vix_qoq':'macro', 'is_structural_break':'bank'
                      # 'dep_small_3m_less_to_assets',
                      # 'dep_small_3m_1y_to_assets',
@@ -75,17 +75,15 @@ c = {
     'CORRECT_STRUCTURAL_BREAKS_TOTAL_ASSETS': True,                
     'DATA_BEGIN': None, #'2017-01-01',                              
     'DATA_END': None,                                  
-    'RESTRICT_TO_NUMBER_OF_BANKS': 20,                 
+    'RESTRICT_TO_NUMBER_OF_BANKS': 50,                 
     'RESTRICT_TO_BANK_SIZE': None,                      
     'RESTRICT_TO_MINIMAL_DEPOSIT_RATIO': None,          
     'RESTRICT_TO_MAX_CHANGE_IN_DEPOSIT_RATIO': None,     
     'INCLUDE_AUTOREGRESSIVE_LAGS': True,                
     'NUMBER_OF_LAGS_TO_INCLUDE': 8,                     
     'TRAIN_TEST_SPLIT_DIMENSION': 'date',               
-    'TEST_SPLIT': 0.25                                  # Takes a number or a date in the format 'YYYY-MM-DD'
+    'TEST_SPLIT': "2022-04-01"                                  # Takes a number or a date in the format 'YYYY-MM-DD'
 }
-
-
 
 
 
@@ -93,7 +91,10 @@ c = {
 # Options: None (all defined models), or a list of model names, e.g., ["XGBoost", "Ridge", "NeuralNetwork"]
 # Available models: "XGBoost", "RandomForest", "DecisionTree", "Lasso", "Ridge", "ElasticNet", 
 #                   "LinearRegression", "NeuralNetwork", "DummyRegressor", "RFE_Pipeline_RF"
-MODELS_TO_RUN = ["LinearRegression", "XGBoost", "DecisionTree", "Lasso", "DummyRegressor", "RandomForest", "RFE_Pipeline_RF"] 
+MODELS_TO_RUN = ["LinearRegression", "XGBoost", "DecisionTree", "RandomForest", 
+                 "RFE_Pipeline_RF", "RFE_Pipeline_LR", "RFE_DTR_Pipeline_RF", "RFE_DTR_Pipeline_LR"] 
+
+
 
 # --- Cross-validation & Hyperparameter Tuning ---
 N_SPLITS_CV = 3
@@ -101,7 +102,7 @@ USE_RANDOM_SEARCH_CV = True
 N_ITER_RANDOM_SEARCH = 10
 
 # --- Ensemble Configuration ---
-POTENTIAL_BASE_MODELS_FOR_ENSEMBLE = ["XGBoost", "RandomForest", "DecisionTree", "LinearRegression", "Lasso", "Ridge", "ElasticNet", "NeuralNetwork"]
+POTENTIAL_BASE_MODELS_FOR_ENSEMBLE = ["XGBoost", "RandomForest", "DecisionTree"]
 
 # --- TensorFlow/Keras Specifics ---
 if tf.config.list_physical_devices('GPU'):
@@ -234,9 +235,21 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
             callbacks=[EarlyStopping(monitor='val_loss', patience=15, verbose=0, restore_best_weights=True, mode='min')] # Increased patience
         ),
         "RFE_Pipeline_RF": Pipeline([
-            ('rfe', RFE(estimator=LinearRegression(), n_features_to_select=None)), # n_features_to_select will be tuned
+            ('rfe', RFE(estimator=LinearRegression(), n_features_to_select=None)), 
             ('RandomForest', RandomForestRegressor(random_state=42, n_jobs=-1))
-        ])
+        ]),
+        "RFE_Pipeline_LR": Pipeline([ # Added RFE with Linear Regression
+            ('rfe', RFE(estimator=LinearRegression(), n_features_to_select=None)), 
+            ('LinearRegression', LinearRegression()) # Final estimator
+        ]),
+        "RFE_DTR_Pipeline_RF": Pipeline([ # New: RFE with DecisionTreeRegressor estimator, final RF
+            ('rfe', RFE(estimator=DecisionTreeRegressor(max_depth=5, random_state=42), n_features_to_select=None)),
+            ('RandomForest', RandomForestRegressor(random_state=42, n_jobs=-1))
+        ]),
+        "RFE_DTR_Pipeline_LR": Pipeline([ # New: RFE with DecisionTreeRegressor estimator, final LR
+            ('rfe', RFE(estimator=DecisionTreeRegressor(max_depth=5, random_state=42), n_features_to_select=None)),
+            ('LinearRegression', LinearRegression())
+        ]),
     }
 
     # Estimate max number of features for RFE tuning range
@@ -292,6 +305,22 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
                 'RandomForest__max_depth': [None] + list(range(5, 21)),
                 'RandomForest__min_samples_split': randint(2, 16),
                 'RandomForest__min_samples_leaf': randint(1, 11)
+            },
+            "RFE_DTR_Pipeline_RF": { # Param grid for new RFE_DTR_Pipeline_RF
+                'rfe__n_features_to_select': randint(max(1, approx_max_features // 4), max(2, approx_max_features + 1)),
+                'RandomForest__n_estimators': randint(10, 151),
+                'RandomForest__max_depth': [None] + list(range(5, 21)),
+                'RandomForest__min_samples_split': randint(2, 16),
+                'RandomForest__min_samples_leaf': randint(1, 11)
+            },
+            "RFE_Pipeline_LR": { # Param grid for RFE_Pipeline_LR
+                'rfe__n_features_to_select': randint(max(1, approx_max_features // 4), max(2, approx_max_features + 1)),
+                # LinearRegression itself has few hyperparameters to tune that drastically change stability beyond feature selection
+                # 'LinearRegression__fit_intercept': [True, False] # Example if you wanted to tune LR params
+            },
+            "RFE_DTR_Pipeline_LR": { # Param grid for new RFE_DTR_Pipeline_LR
+                'rfe__n_features_to_select': randint(max(1, approx_max_features // 4), max(2, approx_max_features + 1)),
+                # 'LinearRegression__fit_intercept': [True, False]
             }
         }
     else: 
@@ -331,6 +360,21 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
                 'RandomForest__max_depth': [None, 10],
                 'RandomForest__min_samples_split': [2, 10],
                 'RandomForest__min_samples_leaf': [1, 5]
+            },
+            "RFE_DTR_Pipeline_RF": { # Param grid for new RFE_DTR_Pipeline_RF (GridSearch)
+                'rfe__n_features_to_select': [max(1, approx_max_features // 3), max(1, approx_max_features * 2 // 3), approx_max_features],
+                'RandomForest__n_estimators': [50, 100],
+                'RandomForest__max_depth': [None, 10],
+                'RandomForest__min_samples_split': [2, 10],
+                'RandomForest__min_samples_leaf': [1, 5]
+            },
+            "RFE_Pipeline_LR": { # Param grid for RFE_Pipeline_LR
+                'rfe__n_features_to_select': [max(1, approx_max_features // 3), max(1, approx_max_features * 2 // 3), approx_max_features],
+                # 'LinearRegression__fit_intercept': [True, False]
+            },
+            "RFE_DTR_Pipeline_LR": { # Param grid for new RFE_DTR_Pipeline_LR (GridSearch)
+                'rfe__n_features_to_select': [max(1, approx_max_features // 3), max(1, approx_max_features * 2 // 3), approx_max_features],
+                # 'LinearRegression__fit_intercept': [True, False]
             }
         }
     return models, param_grids
@@ -448,27 +492,6 @@ def _fit_model_with_tuning(model_name_key: str, model_instance, X_train: pd.Data
 #--------------------------------------------------------------------------------------------------------------------
 #region Helper Functions
 #--------------------------------------------------------------------------------------------------------------------
-
-def _calculate_metrics(y_true: pd.Series, predictions: np.ndarray) -> dict:
-    """Calculates standard regression metrics."""
-    if y_true.empty or len(predictions) != len(y_true):
-        return {'MAE': np.nan, 'MSE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan}
-
-    mae = mean_absolute_error(y_true, predictions)
-    mse = mean_squared_error(y_true, predictions)
-    rmse = np.sqrt(mse)
-    r2 = r2_score(y_true, predictions)
-
-    # Calculate MAPE, handling potential division by zero
-    y_true_no_zeros = y_true.replace(0, np.nan).dropna() # Use np.nan for robustness
-    if not y_true_no_zeros.empty:
-        predictions_aligned = pd.Series(predictions, index=y_true.index).loc[y_true_no_zeros.index]
-        mape = np.mean(np.abs((y_true_no_zeros - predictions_aligned) / y_true_no_zeros)) * 100
-    else:
-        mape = np.nan
-    return {'MAE': mae, 'MSE': mse, 'RMSE': rmse, 'R2': r2, 'MAPE': mape}
-
-
 #--------------------------------------------------------------------------------------------------------------------
 #region Load and Initial Prepare
 #--------------------------------------------------------------------------------------------------------------------
@@ -499,7 +522,7 @@ def train_evaluate_model(model_name_key, model_instance, X_train, y_train, X_tes
     """Trains a single model, tunes if param_grid is provided, and evaluates it."""
     if X_train.empty or (hasattr(X_train, 'shape') and X_train.shape[1] == 0):
         print(f"    Skipping {model_name_key}: X_train is empty or has no features.")
-        return {'MAE': np.nan, 'MSE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan, 'RMSE_train': np.nan, 'model_object': model_instance}
+        return {'model_object': None, 'predictions_train': None, 'predictions_test': None}
 
     # Handle XGBoost early stopping eval_set *before* calling _fit_model_with_tuning
     # This is because eval_set is a fit parameter, not a model parameter.
@@ -528,13 +551,9 @@ def train_evaluate_model(model_name_key, model_instance, X_train, y_train, X_tes
         # If not tuning, KerasRegressor.fit() is called directly; it might use an internal validation_split if configured, or just train loss for early stopping.
         fitted_model_to_use = _fit_model_with_tuning(model_name_key, model_instance, X_train, y_train, param_grid, cv_splitter, use_random_search, n_iter_random_search)
 
-    # Use the new evaluation function
-    metrics = _predict_and_evaluate(fitted_model_to_use, X_train, y_train, X_test, y_test, model_name_key)
+    predictions_train, predictions_test = _predict_and_evaluate(fitted_model_to_use, X_train, y_train, X_test, y_test, model_name_key)
 
-    # Add the fitted model object to the metrics dictionary
-    metrics['model_object'] = fitted_model_to_use
-
-    return metrics
+    return {'model_object': fitted_model_to_use, 'predictions_train': predictions_train, 'predictions_test': predictions_test}
 
 def train_evaluate_ensemble(trained_models_dict, X_train_scaled, y_train, X_test_scaled, y_test):
     """Trains and evaluates a VotingRegressor ensemble model."""
@@ -544,7 +563,7 @@ def train_evaluate_ensemble(trained_models_dict, X_train_scaled, y_train, X_test
         return None
     if X_test_scaled.empty or y_test.empty:
         print("    VotingEnsemble: Skipping evaluation due to empty test data.")
-        return {'MAE': np.nan, 'MSE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan, 'RMSE_train': np.nan, 'model_object': None}
+        return {'model_object': None, 'predictions_train': None, 'predictions_test': None}
     estimators = [] # List to hold (name, model_blueprint) tuples
     potential_base_models = POTENTIAL_BASE_MODELS_FOR_ENSEMBLE # Use the configured list
     for model_name_key in potential_base_models:
@@ -588,101 +607,24 @@ def train_evaluate_ensemble(trained_models_dict, X_train_scaled, y_train, X_test
         X_train_copy = X_train_scaled.copy()
         y_train_copy = y_train.copy()
         voting_reg.fit(X_train_copy, y_train_copy)
-        predictions_test = voting_reg.predict(X_test_scaled)
-        rmse_train_ensemble = np.nan
+        
+        predictions_train_ensemble = None
         if not X_train_scaled.empty and len(X_train_scaled) > 0:
-            predictions_train = voting_reg.predict(X_train_scaled)
-            if len(predictions_train) == len(y_train): 
-                 rmse_train_ensemble = np.sqrt(mean_squared_error(y_train, predictions_train))
-            else:
-                print(f"    VotingEnsemble WARNING: Train prediction length ({len(predictions_train)}) mismatch with y_train ({len(y_train)}).")
-        test_metrics = _calculate_metrics(y_test, predictions_test)
+            predictions_train_ensemble = voting_reg.predict(X_train_scaled)
+
+        predictions_test_ensemble = None
+        if not X_test_scaled.empty and len(X_test_scaled) > 0:
+            predictions_test_ensemble = voting_reg.predict(X_test_scaled)
+            
         print("    Voting Regressor trained successfully.")
         return {
-            **test_metrics, 
-            'RMSE_train': rmse_train_ensemble,
-            'model_object': voting_reg
+            'model_object': voting_reg,
+            'predictions_train': predictions_train_ensemble,
+            'predictions_test': predictions_test_ensemble
         }
     except Exception as e:
         print(f"    Error training Voting Regressor: {e}")
         return None
-
-def aggregate_and_display_results(results_store: dict, plot_result_charts: bool = False, print_final_summary: bool = True):
-    """Aggregates results from all horizons and models, prints a summary, and plots RMSE."""
-    print("\n\n--- Final Model Performance Summary ---")
-    summary_entries = []
-    train_test_rmse_entries = []
-    for horizon, models_results in results_store.items():
-        for model_name, metrics in models_results.items():
-            if isinstance(metrics, dict):
-                rmse_test_val = metrics.get('RMSE', np.nan)
-                rmse_train_val = metrics.get('RMSE_train', np.nan)
-                summary_entries.append({
-                    'Horizon': horizon,
-                    'Model': model_name,
-                    'MAE': metrics.get('MAE', np.nan),
-                    'RMSE': rmse_test_val,
-                    'R2': metrics.get('R2', np.nan),
-                    'MAPE': metrics.get('MAPE', np.nan)
-                })
-                train_test_rmse_entries.append({
-                    'Horizon': horizon,
-                    'Model': model_name,
-                    'RMSE_Train': rmse_train_val,
-                    'RMSE_Test': rmse_test_val
-                })
-            else: 
-                 summary_entries.append({
-                    'Horizon': horizon,
-                    'Model': model_name, 
-                    'MAE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan
-                })
-                 train_test_rmse_entries.append({
-                    'Horizon': horizon,
-                    'Model': model_name,
-                    'RMSE_Train': np.nan,
-                    'RMSE_Test': np.nan
-                })
-    if not summary_entries:
-        print("No results to display. Check for errors during model training or evaluation.")
-        return pd.DataFrame() 
-    summary_df = pd.DataFrame(summary_entries)
-    # Ensure RMSE is numeric before sorting
-    summary_df = summary_df.sort_values(by=['Horizon', 'RMSE'])
-    if print_final_summary:
-        print("\nOverall Performance Metrics (Test Set):")
-        display(summary_df) 
-    if plot_result_charts:
-        if summary_df.empty or not any(results_store.values()) or summary_df['RMSE'].isnull().all(): 
-            print("Cannot plot results: summary is empty, RMSE is all NaN, or FORECAST_HORIZONS not defined.")
-            return summary_df
-        plt.figure(figsize=(14, 8))
-        unique_models = summary_df['Model'].unique()
-        for model_name_plot in unique_models: 
-            model_data = summary_df[summary_df['Model'] == model_name_plot].dropna(subset=['RMSE', 'Horizon']) 
-            if not model_data.empty:
-                # If multiple targets, label lines with target and model
-                if 'TargetVariable' in summary_df.columns and summary_df['TargetVariable'].nunique() > 1:
-                    for target_var_plot in model_data['TargetVariable'].unique():
-                        target_model_data = model_data[model_data['TargetVariable'] == target_var_plot]
-                        plt.plot(target_model_data['Horizon'].astype(str), target_model_data['RMSE'], marker='o', linestyle='-', label=f"{target_var_plot} - {model_name_plot}")
-                else: # Single target or TargetVariable column not present
-                    plt.plot(model_data['Horizon'].astype(str), model_data['RMSE'], marker='o', linestyle='-', label=model_name_plot)
-        plt.xlabel(f"Forecast Horizon ({c.get('TRAIN_TEST_SPLIT_DIMENSION', 'periods')})")
-        plt.ylabel("Root Mean Squared Error (RMSE)")
-        plt.title("Model RMSE vs. Forecast Horizon", fontsize=16)
-        plt.legend(title="Model", bbox_to_anchor=(1.05, 1), loc='upper left')
-        plt.grid(True, which='both', linestyle='--', linewidth=0.5)
-        plt.tight_layout() 
-        plt.show()
-    if train_test_rmse_entries and print_final_summary:
-        train_test_rmse_df = pd.DataFrame(train_test_rmse_entries)
-        sort_by_cols = ['TargetVariable', 'Horizon', 'RMSE_Test'] if 'TargetVariable' in train_test_rmse_df.columns else ['Horizon', 'RMSE_Test']
-        train_test_rmse_df = train_test_rmse_df.sort_values(by=sort_by_cols)
-        print("\n\n--- Training vs. Test RMSE Comparison ---")
-        with pd.option_context('display.max_rows', None, 'display.max_columns', None, 'display.width', 1000):
-            display(train_test_rmse_df)
-    return summary_df
 
 def _predict_and_evaluate(fitted_model, X_train: pd.DataFrame, y_train: pd.Series,
                           X_test: pd.DataFrame, y_test: pd.Series, model_name_key: str):
@@ -690,33 +632,30 @@ def _predict_and_evaluate(fitted_model, X_train: pd.DataFrame, y_train: pd.Serie
     Makes predictions using a fitted model and calculates evaluation metrics.
     Returns a dictionary of metrics.
     """
-    metrics = {'MAE': np.nan, 'MSE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan, 'RMSE_train': np.nan}
+    predictions_train_output = None
+    predictions_test_output = None
 
     if fitted_model is None:
         print(f"    Skipping prediction/evaluation for {model_name_key}: Model is not fitted.")
-        return metrics
+        return predictions_train_output, predictions_test_output
 
     if X_test.empty or y_test.empty:
         print(f"    Skipping test prediction/evaluation for {model_name_key} as X_test or y_test is empty.")
     else:
         try:
-            predictions_test = fitted_model.predict(X_test)
-            metrics.update(_calculate_metrics(y_test, predictions_test))
+            predictions_test_output = fitted_model.predict(X_test)
         except Exception as e:
             print(f"    Error during test prediction for {model_name_key}: {e}")
 
-    # Calculate train RMSE (optional, for checking overfitting)
     if not X_train.empty and len(X_train) > 0 and not y_train.empty and len(X_train) == len(y_train):
         try:
-            predictions_train = fitted_model.predict(X_train)
-            metrics['RMSE_train'] = np.sqrt(mean_squared_error(y_train, predictions_train)) 
+            predictions_train_output = fitted_model.predict(X_train)
         except Exception as e_train_rmse:
-            print(f"    Could not calculate train RMSE for {model_name_key}: {e_train_rmse}")
-            metrics['RMSE_train'] = np.nan
+            print(f"    Could not make train predictions for {model_name_key}: {e_train_rmse}")
     elif not y_train.empty:
-         print(f"    Skipping train RMSE for {model_name_key} due to empty or mismatched train data (X_train empty: {X_train.empty}, y_train empty: {y_train.empty}, lengths match: {len(X_train) == len(y_train) if not X_train.empty and not y_train.empty else False}).")
+         print(f"    Skipping train predictions for {model_name_key} due to empty or mismatched train data (X_train empty: {X_train.empty}, y_train empty: {y_train.empty}, lengths match: {len(X_train) == len(y_train) if not X_train.empty and not y_train.empty else False}).")
 
-    return metrics
+    return predictions_train_output, predictions_test_output
 
 #endregion
 
@@ -811,8 +750,8 @@ for current_target_variable in TARGET_VARIABLES.keys():
         if prepared_data is None:
             print(f"  Skipping horizon {horizon_val} for target {current_target_variable} due to data preparation failure.")
             for name_model in models_config.keys():
-                results_store[current_target_variable][horizon_val][name_model] = {'MAE': np.nan, 'MSE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan, 'RMSE_train': np.nan, 'model_object': None}
-            results_store[current_target_variable][horizon_val]['VotingEnsemble'] = {'MAE': np.nan, 'MSE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan, 'RMSE_train': np.nan, 'model_object': None}
+                results_store[current_target_variable][horizon_val][name_model] = {'model_object': None}
+            results_store[current_target_variable][horizon_val]['VotingEnsemble'] = {'model_object': None}
             continue 
                 
         X_train_scaled_df, X_test_scaled_df, y_train, y_test, X_train_orig, X_test_orig = prepared_data
@@ -867,7 +806,7 @@ for current_target_variable in TARGET_VARIABLES.keys():
             model_results = None 
             if X_train_scaled_df.empty or y_train.empty:
                 print(f"    Skipping {model_name_loop} due to empty scaled training data for target {current_target_variable}, H{horizon_val}.")
-                results_store[current_target_variable][horizon_val][model_name_loop] = {'MAE': np.nan, 'MSE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan, 'RMSE_train': np.nan, 'model_object': None}
+                results_store[current_target_variable][horizon_val][model_name_loop] = {'model_object': None}
                 continue # Skip to the next model in the loop
             
             # If it's a NeuralNetwork, we add specific callbacks to this cloned instance
@@ -897,7 +836,10 @@ for current_target_variable in TARGET_VARIABLES.keys():
                 use_random_search=USE_RANDOM_SEARCH_CV, n_iter_random_search=N_ITER_RANDOM_SEARCH
             )
             if model_results:
-                results_store[current_target_variable][horizon_val][model_name_loop] = model_results 
+                # Store only the model object, predictions are not stored in results_store anymore
+                results_store[current_target_variable][horizon_val][model_name_loop] = {
+                    'model_object': model_results.get('model_object')
+                }
                 actual_model_object_from_training = model_results.get('model_object')
 
                 if SAVE_ARTIFACTS and actual_model_object_from_training is not None and current_target_artifact_dir_for_horizon:
@@ -909,7 +851,10 @@ for current_target_variable in TARGET_VARIABLES.keys():
                             print(f"    Saved Keras model for {model_name_loop} to {keras_save_path}")
                         except Exception as e_keras:
                             print(f"    Error saving Keras model for {model_name_loop}: {e_keras}")
-                        results_store[current_target_variable][horizon_val][model_name_loop]['model_object'] = None
+                        # Ensure model_object is set to None in results_store if Keras model is saved separately
+                        # and the KerasRegressor wrapper itself is not what we want to joblib.
+                        # However, if the wrapper *is* what we want, this line is not needed.
+                        # For now, assuming we save the Keras model and don't need to joblib the wrapper.
                     else: 
                         try:
                             joblib.dump(actual_model_object_from_training, model_path)
@@ -918,13 +863,17 @@ for current_target_variable in TARGET_VARIABLES.keys():
                             print(f"    Error saving {model_name_loop} model: {e}")
                             results_store[current_target_variable][horizon_val][model_name_loop]['model_object'] = None 
             else:
-                results_store[current_target_variable][horizon_val][model_name_loop] = {'MAE': np.nan, 'MSE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan, 'RMSE_train': np.nan, 'model_object': None}
+                results_store[current_target_variable][horizon_val][model_name_loop] = {'model_object': None}
 
         if results_store[current_target_variable][horizon_val] and not (X_train_scaled_df.empty or y_train.empty):
             ensemble_results = train_evaluate_ensemble(results_store[current_target_variable][horizon_val], X_train_scaled_df, y_train, X_test_scaled_df, y_test)
             if ensemble_results:
-                results_store[current_target_variable][horizon_val]['VotingEnsemble'] = ensemble_results
-                if SAVE_ARTIFACTS and ensemble_results.get('model_object') is not None and current_target_artifact_dir_for_horizon:
+                # Store only the model object for the ensemble
+                results_store[current_target_variable][horizon_val]['VotingEnsemble'] = {
+                    'model_object': ensemble_results.get('model_object')
+                }
+                ensemble_model_object = ensemble_results.get('model_object')
+                if SAVE_ARTIFACTS and ensemble_model_object is not None and current_target_artifact_dir_for_horizon:
                     model_path = os.path.join(current_target_artifact_dir_for_horizon, "VotingEnsemble.joblib")
                     try:
                         joblib.dump(ensemble_results['model_object'], model_path)
@@ -937,308 +886,18 @@ for current_target_variable in TARGET_VARIABLES.keys():
                            isinstance(results_store[current_target_variable][horizon_val]['VotingEnsemble'], dict):
                             results_store[current_target_variable][horizon_val]['VotingEnsemble']['model_object'] = None
             else: 
-                results_store[current_target_variable][horizon_val]['VotingEnsemble'] = {'MAE': np.nan, 'MSE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan, 'RMSE_train': np.nan, 'model_object': None}
+                results_store[current_target_variable][horizon_val]['VotingEnsemble'] = {'model_object': None}
         else: 
-            results_store[current_target_variable][horizon_val]['VotingEnsemble'] = {'MAE': np.nan, 'MSE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan, 'RMSE_train': np.nan, 'model_object': None}
+            results_store[current_target_variable][horizon_val]['VotingEnsemble'] = {'model_object': None}
 
-    # Plot features for the current target if data is available
-    if all_data_prepared is not None and not all_data_prepared.empty: # Use the globally prepared data
-        print(f"\n--- Plotting features for Target: {current_target_variable} ---")
-        plot_cols = [current_target_variable] 
-        if 'log_total_assets' in all_data_prepared.columns: plot_cols.append('log_total_assets')
-        if 'deposit_ratio' in all_data_prepared.columns: plot_cols.append('deposit_ratio')
-        
-        plot_cols_existing = [col for col in plot_cols if col in all_data_prepared.columns]
-        if plot_cols_existing:
-            plot_features_timeseries_flat(all_data_prepared.reset_index(), feature_columns=plot_cols_existing)
-        else:
-            print(f"Warning: None of the specified columns for timeseries plot exist in data for target {current_target_variable}.")
-    else:
-        print(f"Skipping feature timeseries plot for target {current_target_variable} as its base data is empty or None.")
+    # Feature plotting for target variable, log_total_assets, and deposit_ratio has been removed as per request.
 
-final_summary_df = aggregate_and_display_results(results_store, plot_result_charts=PLOT_RESULT_CHARTS, print_final_summary=PRINT_FINAL_SUMMARY)
+# final_summary_df = aggregate_and_display_results(results_store, plot_result_charts=PLOT_RESULT_CHARTS, print_final_summary=PRINT_FINAL_SUMMARY) # Removed
 if SAVE_ARTIFACTS:
     joblib.dump(results_store, os.path.join(ARTIFACTS_BASE_DIR, "results_store.joblib"))
     print(f"Saved full results_store to {os.path.join(ARTIFACTS_BASE_DIR, 'results_store.joblib')}")
-    if final_summary_df is not None and not final_summary_df.empty:
-        final_summary_df.to_csv(os.path.join(ARTIFACTS_BASE_DIR, "final_summary_metrics.csv"), index=False)
-        print(f"Saved final_summary_df to {os.path.join(ARTIFACTS_BASE_DIR, 'final_summary_metrics.csv')}")
 #endregion
 #endregion
 
-
-
-
-#--------------------------------------------------------------------------------------------------------------------
-#region Plot estimated vs actual values
-#--------------------------------------------------------------------------------------------------------------------
-
-
-first_target_for_plot = list(TARGET_VARIABLES.keys())[0] if TARGET_VARIABLES else None
-results_h1_first_target = {}
-if first_target_for_plot and first_target_for_plot in results_store:
-    results_h1_first_target = results_store[first_target_for_plot].get(1, {})
-
-X_train_scaled_df_h1, X_test_scaled_df_h1, y_train_h1, y_test_h1 = None, None, None, None # Initialize with None
-h1_data_loaded_successfully = False
-if first_target_for_plot and 1 in FORECAST_HORIZONS:
-    if SAVE_ARTIFACTS and ARTIFACTS_BASE_DIR:
-        sanitized_first_target_name = first_target_for_plot.replace('/', '_').replace('\\', '_')
-        h1_data_dir = os.path.join(ARTIFACTS_BASE_DIR, f"target_{sanitized_first_target_name}", "horizon_1", "data")
-        required_files = {
-            "X_train": os.path.join(h1_data_dir, "X_train_scaled.parquet"),
-            "X_test": os.path.join(h1_data_dir, "X_test_scaled.parquet"),
-            "y_train": os.path.join(h1_data_dir, "y_train.parquet"),
-            "y_test": os.path.join(h1_data_dir, "y_test.parquet"),
-        }
-        if all(os.path.exists(p) for p in required_files.values()):
-            try:
-                X_train_scaled_df_h1 = pd.read_parquet(required_files["X_train"])
-                X_test_scaled_df_h1 = pd.read_parquet(required_files["X_test"])
-                y_train_df_h1 = pd.read_parquet(required_files["y_train"])
-                y_test_df_h1 = pd.read_parquet(required_files["y_test"])
-                y_train_h1 = y_train_df_h1[y_train_df_h1.columns[0]]
-                y_test_h1 = y_test_df_h1[y_test_df_h1.columns[0]]
-                h1_data_loaded_successfully = True
-                print(f"Successfully loaded Horizon 1 data for target '{first_target_for_plot}' from artifacts for plotting.")
-            except Exception as e:
-                print(f"Error loading Horizon 1 data for target '{first_target_for_plot}' from artifacts: {e}. Plotting may be affected.")
-        else:
-            print(f"Warning: Not all Horizon 1 data artifacts for target '{first_target_for_plot}' found. Plotting may be affected.")
-    if not h1_data_loaded_successfully:
-        print(f"Could not load Horizon 1 data for target '{first_target_for_plot}'. Fallback to last processed data not robustly implemented for multi-target plotting.")
-        h1_data_loaded_successfully = False # Ensure it's false if fallback isn't robustly handled
-models_to_plot = []
-for model_name, metrics in results_h1_first_target.items():
-    if 'model_object' in metrics and metrics['model_object'] is not None and hasattr(metrics['model_object'], 'predict'): # Check if model object exists and has predict method
-        # Removed check for Prophet
-            models_to_plot.append((model_name, metrics))
-if not models_to_plot:
-    # Handle case where no models are suitable for plotting
-    print("No suitable models found in results_h1 to plot, or H1 data is unavailable.")
-else:
-    models_to_plot_count = len(models_to_plot)
-    num_cols = 3
-    num_rows = math.ceil(models_to_plot_count / num_cols)
-    fig, axes = plt.subplots(num_rows, num_cols, figsize=(18, 5 * num_rows), squeeze=False)
-    axes = axes.flatten()
-    plot_index = 0
-    def plot_aggregated_timeseries(ax, data_series, label_prefix, color, line_style='-'):
-        if not isinstance(data_series.index, pd.MultiIndex) or 'date' not in data_series.index.names: # Check for MultiIndex with 'date'
-            print(f"Skipping {label_prefix} plot: data index is not a MultiIndex with 'date'. Index type: {type(data_series.index)}")
-            return
-        quantiles_series = data_series.groupby(level='date').quantile([0.25, 0.50, 0.75])
-        if quantiles_series.empty:
-            print(f"Warning: Empty quantiles for {label_prefix}. Skipping plot for it.")
-            return
-        quantiles_df = quantiles_series.unstack()
-        if not (0.25 in quantiles_df.columns and 0.50 in quantiles_df.columns and 0.75 in quantiles_df.columns):
-            print(f"Warning: Could not find all quantile columns (0.25, 0.50, 0.75) for {label_prefix}. Columns: {quantiles_df.columns}. Skipping.")
-            return
-        dates_idx = quantiles_df.index
-        mean_values = quantiles_df[0.50]
-        q1_values = quantiles_df[0.25]
-        q3_values = quantiles_df[0.75]
-        ax.plot(dates_idx, mean_values, label=f'{label_prefix} Mean', color=color, linestyle=line_style)
-        ax.fill_between(dates_idx, q1_values, q3_values, color=color, alpha=0.2, label=f'{label_prefix} IQR')
-    for model_name, metrics in models_to_plot:
-        ax = axes[plot_index]
-        model = metrics['model_object'] # Get the model object
-        mape = metrics.get('MAPE', float('nan'))
-
-        # Make predictions
-        raw_predictions_train = model.predict(X_train_scaled_df_h1)
-        predictions_train_series = pd.Series(raw_predictions_train, index=y_train_h1.index)
-
-        raw_predictions_test = model.predict(X_test_scaled_df_h1)
-        predictions_test_series = pd.Series(raw_predictions_test, index=y_test_h1.index)
-
-        # Plot actuals and predictions
-        plot_aggregated_timeseries(ax, y_train_h1, 'Actual Train', 'blue')
-        plot_aggregated_timeseries(ax, predictions_train_series, 'Predicted Train', 'orange', line_style='--')
-        plot_aggregated_timeseries(ax, y_test_h1, 'Actual Test', 'green')
-        plot_aggregated_timeseries(ax, predictions_test_series, 'Predicted Test', 'red', line_style='--')        
-        ax.set_title(f'{model_name} ({first_target_for_plot}, H=1) (MAPE: {mape:.2f}%)', fontsize=10)
-        ax.set_xlabel('Date', fontsize=8)
-        ax.set_ylabel(first_target_for_plot, fontsize=8)
-        if not y_train_h1.empty or not y_test_h1.empty: # Check if there's any data to plot dates for
-            ax.xaxis.set_major_formatter(plt.matplotlib.dates.DateFormatter('%Y-%m'))
-        ax.tick_params(axis='x', rotation=45, labelsize=7)
-        ax.tick_params(axis='y', labelsize=7)
-        ax.legend(fontsize=7)
-        ax.grid(True, linestyle='--', alpha=0.7)
-        plot_index += 1
-    for i in range(plot_index, len(axes)): fig.delaxes(axes[i])
-    plt.tight_layout(pad=2.0)
-    fig.suptitle(f"Model Predictions vs Actuals ({first_target_for_plot}, Horizon 1 - Mean and IQR over Banks)", fontsize=16, y=0.995)
-    plt.show()
-#endregion
-
-# Concat y_train_h1 and y_test_h1, calculate the mean per quarter, and plot the mean actuals
-if y_train_h1 is not None and not y_train_h1.empty and \
-   y_test_h1 is not None and not y_test_h1.empty: # Ensure both train and test actuals are available
-    # Group by the 'date' level of the MultiIndex and calculate the mean
-    mean_actuals_train_over_time = y_train_h1.groupby(level='date').mean()
-    mean_actuals_test_over_time = y_test_h1.groupby(level='date').mean()
-
-    if not mean_actuals_train_over_time.empty or not mean_actuals_test_over_time.empty:
-        plt.figure(figsize=(12, 6))
-        if not mean_actuals_train_over_time.empty:
-            plt.plot(mean_actuals_train_over_time.index, mean_actuals_train_over_time.values, marker='o', linestyle='-', color='blue', label='Mean Actuals (Train)')
-        if not mean_actuals_test_over_time.empty:
-            plt.plot(mean_actuals_test_over_time.index, mean_actuals_test_over_time.values, marker='o', linestyle='-', color='green', label='Mean Actuals (Test)')
-
-        plt.title(f'Mean Actual {first_target_for_plot} Over Time (Horizon 1)', fontsize=14)
-        plt.xlabel('Date', fontsize=10)
-        plt.ylabel(first_target_for_plot, fontsize=10)
-        plt.xticks(rotation=45)
-        plt.grid(True, linestyle='--', alpha=0.7)
-        plt.legend()
-        plt.tight_layout()
-        plt.show()
-else:
-    print("Skipping mean actuals plot as Horizon 1 train or test data is empty or None.")
-    
-
-
-#--------------------------------------------------------------------------------------------------------------------
-#region Feature importance plotting
-#--------------------------------------------------------------------------------------------------------------------
-def plot_feature_importance(model, feature_names, ax=None, top_n=10, r2_score_val=None, model_display_name=None):
-    """Plots feature importance for tree-based models or coefficients for linear models."""
-    if ax is None:
-        fig_fi, ax = plt.subplots(figsize=(10, 6))
-
-    title_prefix = model_display_name if model_display_name else "Feature"
-    title_suffix = ""
-    if r2_score_val is not None and not np.isnan(r2_score_val):
-        title_suffix = f" (R²: {r2_score_val:.2f})"
-
-    importances_values = None
-    processed_feature_names = feature_names
-
-    if isinstance(model, Pipeline) and 'rfe' in model.named_steps and 'regressor' in model.named_steps:
-        # This is an RFE pipeline
-        rfe_step = model.named_steps['rfe']
-        regressor_step = model.named_steps['regressor']
-        if hasattr(rfe_step, 'support_'):
-            processed_feature_names = np.array(feature_names)[rfe_step.support_]
-            print(f"  Features selected by RFE for {model.named_steps['regressor'].__class__.__name__}: {list(processed_feature_names)}")
-            if hasattr(regressor_step, 'feature_importances_'):
-                importances_values = regressor_step.feature_importances_
-            elif hasattr(regressor_step, 'coef_'):
-                importances_values = regressor_step.coef_
-            ax.set_title(f'{title_prefix} Importances (RFE w/ {type(regressor_step).__name__}){title_suffix}', fontsize=9)
-        else:
-            print(f"  RFE step in pipeline for {model.named_steps['regressor'].__class__.__name__} has not been fitted or does not have 'support_' attribute.")
-            ax.text(0.5, 0.5, "RFE step not fitted", ha='center', va='center', transform=ax.transAxes)
-            return
-    elif hasattr(model, 'feature_importances_'):
-        importances_values = model.feature_importances_
-        ax.set_title(f'{title_prefix} Importances{title_suffix}', fontsize=9)
-    elif hasattr(model, 'coef_'):
-        importances_values = model.coef_
-        ax.set_title('Feature Coefficients')
-
-    if importances_values is not None:
-        if len(importances_values.shape) > 1 and importances_values.shape[0] == 1: # Handle (1, N) shape for coef_
-            importances_values = importances_values.flatten()
-
-        # Ensure importances_values and processed_feature_names match in length
-        if len(importances_values) != len(processed_feature_names):
-            print(f"Warning: Mismatch in length of importances ({len(importances_values)}) and feature names ({len(processed_feature_names)}). Skipping feature importance plot.")
-            ax.text(0.5, 0.5, "Importance/feature name mismatch", ha='center', va='center', transform=ax.transAxes)
-            return
-
-        indices = np.argsort(np.abs(importances_values))[::-1]
-        top_indices = indices[:top_n]
-        top_importances = importances_values[top_indices]
-        top_feature_names = np.array(processed_feature_names)[top_indices]
-        
-        ax.bar(range(len(top_importances)), top_importances, align='center')
-        ax.set_xticks(range(len(top_importances)))
-        ax.set_xticklabels(top_feature_names, rotation=60, ha='right', fontsize=7) # Adjusted rotation and fontsize
-        ax.set_ylabel('Importance / Coefficient Value')
-        ax.tick_params(axis='y', labelsize=7)
-        # plt.tight_layout() # Applied globally later
-    else:
-        ax.text(0.5, 0.5, "Feature importance not available", ha='center', va='center', transform=ax.transAxes)
-        if not (isinstance(model, Pipeline) and 'rfe' in model.named_steps): # Avoid double title if already set
-            ax.set_title(f'{title_prefix} Importance/Coeffs N/A{title_suffix}', fontsize=9)
-
-
-# Plot feature importance for specified tree-based models for H=1
-tree_models_to_plot_fi = ["XGBoost", "RandomForest", "DecisionTree", "RFE_Pipeline_RF"] # Added RFE_Pipeline_RF
-num_fi_models = len(tree_models_to_plot_fi)
-num_fi_cols = 3
-num_fi_rows = math.ceil(num_fi_models / num_fi_cols)
-
-if first_target_for_plot and 1 in results_store.get(first_target_for_plot, {}) and \
-   X_train_scaled_df_h1 is not None and not X_train_scaled_df_h1.empty:
-    fig_fi_all, axes_fi_all = plt.subplots(num_fi_rows, num_fi_cols, figsize=(num_fi_cols * 4, num_fi_rows * 3.5), squeeze=False) # Adjusted figsize
-    axes_fi_all_flat = axes_fi_all.flatten()
-    plot_idx_fi = 0
-
-    for model_name_fi in tree_models_to_plot_fi:
-        if plot_idx_fi < len(axes_fi_all_flat):
-            ax_current_fi = axes_fi_all_flat[plot_idx_fi]
-            if model_name_fi in results_store[first_target_for_plot][1] and \
-               results_store[first_target_for_plot][1].get(model_name_fi) and \
-               results_store[first_target_for_plot][1][model_name_fi].get('model_object') is not None:
-                
-                model_obj_fi = results_store[first_target_for_plot][1][model_name_fi]['model_object']
-                r2_val_fi = results_store[first_target_for_plot][1][model_name_fi].get('R2', np.nan)
-                actual_feature_names_fi = X_train_scaled_df_h1.columns.tolist()
-                
-                plot_feature_importance(
-                    model_obj_fi,
-                    actual_feature_names_fi,
-                    ax=ax_current_fi,
-                    top_n=7, # Show fewer features for smaller charts
-                    r2_score_val=r2_val_fi,
-                    model_display_name=model_name_fi
-                )
-            else:
-                ax_current_fi.text(0.5, 0.5, f"{model_name_fi}\nModel or data not found", ha='center', va='center', transform=ax_current_fi.transAxes, fontsize=8)
-                ax_current_fi.set_title(f"{model_name_fi} (N/A)", fontsize=9)
-            plot_idx_fi += 1
-        
-    for i in range(plot_idx_fi, len(axes_fi_all_flat)): # Hide unused subplots
-        fig_fi_all.delaxes(axes_fi_all_flat[i])
-
-    fig_fi_all.suptitle(f"Feature Importances for Tree-Based Models ({first_target_for_plot}, Horizon 1)", fontsize=14, y=1.03) # Adjusted y for suptitle
-
-    plt.tight_layout(rect=[0, 0, 1, 0.98]) # Adjust rect for suptitle
-    plt.show()
-else:
-    print(f"Could not plot feature importances for target {first_target_for_plot}: Horizon 1 results or H1 training data not available.")
-
-
-# --- Display Selected Features for RFE Models ---
-print("\n\n--- Selected Features by RFE Models ---")
-if X_train_scaled_df_h1 is not None and not X_train_scaled_df_h1.empty:
-    original_feature_names_h1 = X_train_scaled_df_h1.columns.tolist()
-    for target_var_rfe, target_results_rfe in results_store.items():
-        print(f"\nTarget Variable: {target_var_rfe}")
-        for horizon_rfe, horizon_results_rfe in target_results_rfe.items():
-            print(f"  Horizon: {horizon_rfe}")
-            for model_name_rfe, model_metrics_rfe in horizon_results_rfe.items():
-                if model_metrics_rfe and 'model_object' in model_metrics_rfe and model_metrics_rfe['model_object'] is not None:
-                    model_obj_rfe = model_metrics_rfe['model_object']
-                    if isinstance(model_obj_rfe, Pipeline) and 'rfe' in model_obj_rfe.named_steps:
-                        rfe_step = model_obj_rfe.named_steps['rfe']
-                        final_estimator_name = [name for name in model_obj_rfe.named_steps if name != 'rfe'][0]
-                        if hasattr(rfe_step, 'support_'):
-                            selected_features = np.array(original_feature_names_h1)[rfe_step.support_]
-                            print(f"    Model: {model_name_rfe} (Final Estimator: {final_estimator_name})")
-                            print(f"      Selected {rfe_step.n_features_} features: {list(selected_features)}")
-                        else:
-                            print(f"    Model: {model_name_rfe} - RFE step not fitted or 'support_' not available.")
-                elif model_metrics_rfe and model_metrics_rfe.get('model_object') is None:
-                     if "RFE" in model_name_rfe: 
-                        print(f"    Model: {model_name_rfe} - Model object is None (likely training/saving failed).")
-
-else:
-    print("Skipping RFE selected features display: X_train_scaled_df_h1 (for feature names) is not available.")
 
 #endregion

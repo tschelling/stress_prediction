@@ -171,6 +171,7 @@ processed_dfs = []
 files_missing_some_codes = {} # Store files and the raw codes they were missing
 processed_files_count = 0
 skipped_files_count = 0
+all_distinct_codes_found_in_files = set() # To store all unique raw codes encountered
 
 if not parquet_files:
     print("Error: No source Parquet files found (excluding potential output file).")
@@ -190,6 +191,7 @@ else:
             # 1. Get available columns in the current file efficiently
             parquet_schema = pq.read_schema(file_path)
             available_columns = set(parquet_schema.names)
+            all_distinct_codes_found_in_files.update(available_columns) # Record all encountered codes
             # print(f"  File has {len(available_columns)} columns.") # Optional log
 
             # 2. Find which of the desired raw codes are actually available in this file
@@ -235,6 +237,17 @@ else:
 
 # --- Concatenate Filtered Data ---
 if processed_dfs:
+    # Print all distinct raw codes encountered across all files
+    sorted_encountered_codes = sorted(list(all_distinct_codes_found_in_files))
+    print(f"\n--- All Distinct Raw Codes Encountered in Input Parquet Files ({len(sorted_encountered_codes)}) ---")
+    # To avoid overly long output, print first few and last few if many codes
+    if len(sorted_encountered_codes) > 20:
+        print(f"First 10: {sorted_encountered_codes[:10]}")
+        print(f"Last 10: {sorted_encountered_codes[-10:]}")
+    else:
+        print(sorted_encountered_codes)
+    print("------------------------------------------------------------------------------------")
+
     print(f"\nConcatenating dataframes for {processed_files_count} files ({skipped_files_count} skipped)...")
     try:
         # Concatenate using outer join to handle files that might miss some columns others have

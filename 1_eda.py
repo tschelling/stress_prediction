@@ -40,14 +40,14 @@ c = {
     'CORRECT_STRUCTURAL_BREAKS_TOTAL_ASSETS': True,                
     'DATA_BEGIN': None, #'2017-01-01',                              
     'DATA_END': None,                                  
-    'RESTRICT_TO_NUMBER_OF_BANKS': 200,                 
+    'RESTRICT_TO_NUMBER_OF_BANKS': 500,                 
     'RESTRICT_TO_BANK_SIZE': None,                      
     'RESTRICT_TO_MINIMAL_DEPOSIT_RATIO': None,          
     'RESTRICT_TO_MAX_CHANGE_IN_DEPOSIT_RATIO': None,     
     'INCLUDE_AUTOREGRESSIVE_LAGS': True,                
     'NUMBER_OF_LAGS_TO_INCLUDE': 8,                     
     'TRAIN_TEST_SPLIT_DIMENSION': 'date',               
-    'TEST_SPLIT': 0.25                                  # Takes a number or a date in the format 'YYYY-MM-DD'
+    'TEST_SPLIT': "2007-01-01"   # Takes a number or a date in the format 'YYYY-MM-DD'
 }
 
 
@@ -63,22 +63,36 @@ data_preparer = RegressionDataPreparer(fred, fdic, yahoo, config=c)
 
 print("--- Missing value stats ----------------------------------------------------------------------------")
 df0 = data_preparer.rectangularize_dataframe(data_preparer.df1).reset_index()
-# Number of missing values in total assets
-missing_total_assets = df0['log_total_assets'].isna().sum()
-print(f"Number of missing values in log total assets: {missing_total_assets}")
+
+data_information = {}
+
 # Number of banks in the full dataset
 number_of_banks = df0['id'].nunique()
+data_information['number_of_banks'] = number_of_banks
 print(f"Number of banks in the dataset: {number_of_banks}")
+
+# Number of positions in the full dataset
+pd.read_parquet('data/fdic/fdic_data_extracted_raw_codes.parquet')
+
+# Number of missing values in total assets
+missing_total_assets = df0['log_total_assets'].isna().sum()
+data_information['missing_log_total_assets'] = missing_total_assets
+print(f"Number of missing values in log total assets: {missing_total_assets}")
+
 # Number of banks with full data, i.e. no missing values in log total assets
 banks_with_full_data = df0.groupby('id')['log_total_assets'].apply(lambda x: x.notna().all()).sum()
+data_information['banks_with_full_data'] = banks_with_full_data
 print(f"Number of banks with full data (no missing log total assets): {banks_with_full_data}")
 # Number of banks with at least one missing value in log total assets
 banks_with_missing_data = number_of_banks - banks_with_full_data
+data_information['banks_with_missing_data'] = banks_with_missing_data
 print(f"Number of banks with at least one missing value in log total assets: {banks_with_missing_data}")
-print(f"Percentage of banks with full data: {banks_with_full_data / number_of_banks * 100:.2f}%")
+data_information['percentage_banks_with_full_data'] = banks_with_full_data / number_of_banks * 100
+print(f"Percentage of banks with full data: {data_information['percentage_banks_with_full_data']:.2f}%")
 
 # Number of banks removed with not enough observations
 nr_banks_removed_not_enough_data = data_preparer.data_processing_stats['bank_removal_not_enough_data']['banks_before'] - data_preparer.data_processing_stats['bank_removal_not_enough_data']['banks_after']
+data_information['banks_removed_insufficient_obs'] = nr_banks_removed_not_enough_data
 print(f"Number of banks removed due to not enough observations: {nr_banks_removed_not_enough_data}")
 
 # Missing values in total assets over time
@@ -86,7 +100,7 @@ missing_total_assets_over_time = df0.groupby('date')['log_total_assets'].apply(l
 # Simple plot of missing values in total assets over time
 missing_total_assets_over_time.plot(title='Missing values in log total assets over time', ylabel='Number of missing values', xlabel='Date')
 plt.show()
-
+print(f"\nData Information Dictionary:\n{data_information}")
 
 
 
