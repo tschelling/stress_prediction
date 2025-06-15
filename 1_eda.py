@@ -13,7 +13,7 @@ importlib.reload(regression_data_preparer) # For development, ensure latest vers
 from regression_data_preparer import RegressionDataPreparer
 
 # --- Configuration (Adapted from 5_multi_output_regressions.py) ---
-PRIMARY_TARGET_FOR_PREPARER = 'interest_income_to_assets'
+PRIMARY_TARGET_FOR_PREPARER = 'interest_income_to_assets' 
 FEATURE_VARIABLES = ['gdp_qoq', 'deposit_ratio', 'loan_to_asset_ratio', 'log_total_assets', 'cpi_qoq', 'unemployment',
                      'household_delinq', 'tbill_3m', 'tbill_10y', 'spread_10y_3m', 'sp500_qoq',
                      'corp_bond_spread', 'vix_qoq']
