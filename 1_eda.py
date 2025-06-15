@@ -244,7 +244,7 @@ test_df_eda = X_test_unscaled_df.copy() if X_test_unscaled_df is not None else p
 
 # Manually prepare and add each EDA target variable
 print(f"\nPreparing target variables for EDA (Horizon {EDA_FORECAST_HORIZON})...")
-base_data_for_targets = data_preparer.base_data_for_horizons.copy() # Use the cleaned base for target shifting
+base_data_for_targets = data_preparer.final_data.copy() # Use the cleaned base for target shifting
 
 for target_name in TARGETS_FOR_EDA:
     y_train_target = prepare_y_for_target_eda(base_data_for_targets, target_name, EDA_FORECAST_HORIZON, train_df_eda.index)

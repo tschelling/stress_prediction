@@ -156,7 +156,7 @@ class TestRegressionDataPreparer(unittest.TestCase):
         # _restrict_sample_logic is called within _prepare_initial_data
         # We can inspect preparer.base_data_for_horizons
         
-        processed_df = preparer.base_data_for_horizons
+        processed_df = preparer.final_data
         
         # Check date restriction
         self.assertTrue((processed_df.index.get_level_values('date') >= pd.to_datetime('2020-04-01')).all())

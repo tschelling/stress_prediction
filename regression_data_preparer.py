@@ -8,12 +8,21 @@ from typing import Any, List, Tuple, Optional, Union, Dict # Ensure Dict is impo
 
 class RegressionDataPreparer:
     
-    def __init__(self, initial_df: pd.DataFrame, config: dict[str, any]):
-        self.df0 = initial_df.copy()
+    def __init__(self, fred: pd.DataFrame, fdic:pd.DataFrame, yahoo:pd.DataFrame, 
+                 config: dict[str, any]):
+        self.fred = fred.copy()
+        self.fdic = fdic.copy()
+        self.yahoo = yahoo.copy()
+
+        self.df0 = None
         self.config = config.copy()
 
-        self.target_variable: str = self.config['TARGET_VARIABLE']
-        self.feature_variables: List[str] = self.config['FEATURE_VARIABLES'][:]
+        self.target_variables: List[str] = list(self.config['TARGET_VARIABLES'].keys())
+        # Ensure feature_variables list does not contain the current target_variable
+        _configured_features = list(self.config.get('FEATURE_VARIABLES').keys())[:]
+        self.feature_variables: List[str] = [fv for fv in _configured_features if fv not in self.target_variables]
+        self.bank_variables =  list(var for var, var_type in self.config['FEATURE_VARIABLES'].items() if var_type == 'bank') + list(self.config['TARGET_VARIABLES'].keys())
+        self.macro_variables = list(var for var, var_type in self.config['FEATURE_VARIABLES'].items() if var_type == 'macro')
         
         self.include_time_fe: bool = self.config.get('INCLUDE_TIME_FE', False)
         self.include_bank_fe: bool = self.config.get('INCLUDE_BANK_FE', False)
@@ -37,46 +46,67 @@ class RegressionDataPreparer:
 
         # DataFrames at different stages of preparation
         # Main preparation steps
-        self.df1_after_initial_cleaning: Optional[pd.DataFrame] = None
-        self.df1_after_var_selection: Optional[pd.DataFrame] = None
-        self.df1a_after_structural_breaks: Optional[pd.DataFrame] = None
-        self.df2_after_missing_value_processing: Optional[pd.DataFrame] = None
-        self.df3_after_winsorization: Optional[pd.DataFrame] = None
-        self.df4_after_time_fe: Optional[pd.DataFrame] = None
-        self.df5_after_bank_fe: Optional[pd.DataFrame] = None
-        self.df6_after_fe_dropna: Optional[pd.DataFrame] = None
-        self.df7_after_outlier_removal: Optional[pd.DataFrame] = None
-        # self.df8_after_sample_restriction will be self.base_data_for_horizons
+        self.df1: Optional[pd.DataFrame] = None
+        self.df2: Optional[pd.DataFrame] = None
+        self.df3: Optional[pd.DataFrame] = None
+        self.df4: Optional[pd.DataFrame] = None
+        self.df5: Optional[pd.DataFrame] = None
+        self.df6: Optional[pd.DataFrame] = None
+        self.df7: Optional[pd.DataFrame] = None
+        self.df8: Optional[pd.DataFrame] = None
+        self.final_data = None
+  
 
         self.new_features_added_during_prep: List[str] = [] # To track features like 'does_not_report'
-        self.base_data_for_horizons = None
         self.final_feature_list: List[str] = self.feature_variables[:]
-        
         self._prepare_initial_data()
 
+
     def _prepare_initial_data(self):
-        df = self.df0.copy() 
-        print(f"\n--- Preparing Initial Data ---")
-        print(f"Initial raw data shape: {df.shape}")
+        
+        print(f"\n--- Merging data FRED, FDIC, yahoo ------------------------------------------------------------")
+        df = self.fred.merge(self.fdic.reset_index(), on='date', how='left').merge(self.yahoo, on='date', how='left')
+        df.set_index(['id', 'date'], inplace=True)
+        
+        print(f"\n--- Process missing values in index: delete missing values, deduplicate -----------------------")
+        df = df[~df.index.get_level_values('id').isna()]
+        self.df0 = df.copy()
 
-        # Select features and target variable
+        print(f"\n--- Process missing values: Forward fill intermittent missing values --------------------------")
+        numeric_fdic_cols = self.fdic.select_dtypes(include=np.number).columns.tolist()
+        numeric_fdic_cols = ['total_assets']
+        df, fill_summary_df = self._fill_intermittent_missing_values(
+            df,
+            columns_to_check=numeric_fdic_cols
+        )
+
+        self.df1 = df.copy()
+
+        print("--- Feature engineering: Calculate financial ratios -----------------------------------")
+        df = self._calculate_financial_ratios(df)
+
+        print(f"\n--- Feature selection --------------------------------------------------------------------")
+
         df = self._select_features_and_target(df)
-        self.df1_after_var_selection = df.copy()
+        self.df2 = df.copy()
 
-        # Process missing values
+        print(f"\n--- Process missing values: Remove remaining missing values --------------------------")
         df, missing_stats = self._process_missing_values(df)
-        self.df2_after_missing_value_processing = df.copy()
+        self.df2 = df.copy()
         self.data_processing_stats = missing_stats # Store stats
         print(f"After missing value processing (no imputation), data shape: {df.shape}")
 
 
         initial_feature_list = self.feature_variables[:]
 
+
+        print(f"\n--- Feature generation: Include newly created features --------------------------")
         for new_feat in self.new_features_added_during_prep:
             if new_feat not in initial_feature_list and new_feat in df.columns:
                 initial_feature_list.append(new_feat)
         print(f"Feature list after considering new prep features: {initial_feature_list}")
 
+        # Include quarter fixed effects
         if self.include_time_fe:
             if not pd.api.types.is_datetime64_any_dtype(df.index.get_level_values('date')):
                  df.index = df.index.set_levels(pd.to_datetime(df.index.get_level_values('date')), level='date')
@@ -84,59 +114,119 @@ class RegressionDataPreparer:
 
             df['quarter'] = 'quarter_' + df.index.get_level_values('date').quarter.astype(str)
             if 'quarter' not in initial_feature_list: initial_feature_list.append('quarter')
-            self.df4_after_time_fe = df.copy()
+            self.df3 = df.copy()
             print("Added time fixed effects: 'quarter'.")
         else:
-            self.df4_after_time_fe = df.copy() # Store even if no change
+            self.df3 = df.copy() # Store even if no change
 
         # Include bank fixed effects if configured
         if self.include_bank_fe:
             df['bank_id'] = ['bank_id_' + str(bank_id) for bank_id in df.index.get_level_values('id')]
             if 'bank_id' not in initial_feature_list:
                 initial_feature_list = ['bank_id'] + initial_feature_list 
-            self.df5_after_bank_fe = df.copy()
+            self.df4 = df.copy()
             print("Added bank fixed effect: 'bank_id'.")
         else:
-            self.df5_after_bank_fe = df.copy() # Store even if no change
+            self.df4 = df.copy() # Store even if no change
         
         self.final_feature_list = initial_feature_list
         
-        # Relic, to delete later
-        self.df6_after_fe_dropna = None
-
+        print(f"\n--- Outlier removal --------------------------")
         if not df.empty:
-            df = self._remove_outliers(df, self.target_variable, threshold=self.config.get('OUTLIER_THRESHOLD_TARGET', 3.0))
+            df = self._remove_outliers(df, self.target_variables, threshold=self.config.get('OUTLIER_THRESHOLD_TARGET', 3.0))
         else:
             print("DataFrame is empty after FE processing and NaN drop. Skipping outlier removal.")
-        self.df7_after_outlier_removal = df.copy()
+        
+        self.df5 = df.copy()
+        
 
+        print(f"\n--- Restrict sample --------------------------")
 
         if not df.empty:
              df = self._restrict_sample_logic(df)
         else:
             print("DataFrame is empty before sample restriction. Skipping sample restriction.")
         
+        self.df6 = df.copy()
+
         # Correct structural breaks in total assets if configured
         if self.correct_structural_breaks_total_assets:
             print("Applying structural break correction for 'total_assets'...")
             df = self._correct_structural_breaks_in_total_assets(df)
-        self.df1a_after_structural_breaks = df.copy()
+        self.df7 = df.copy()
 
+        print(f"\n--- Winsorize data --------------------------")
         df = self._winsorize_data(df) 
-        self.df3_after_winsorization = df.copy()
+        self.df8 = df.copy()
 
 
-        self.base_data_for_horizons = df.copy()
-        print(f"Base data prepared. Shape: {self.base_data_for_horizons.shape}")
+        self.final_data = df.copy()
+        print(f"Base data prepared. Shape: {self.final_data.shape}")
         print(f"Final features for horizon processing: {self.final_feature_list}")
+
+    def _calculate_financial_ratios(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Calculates various financial ratios and adds them as new columns to the DataFrame.
+
+        Args:
+            df (pd.DataFrame): DataFrame with necessary columns
+                            (e.g., total_deposits, total_assets, etc.).
+
+        Returns:
+            pd.DataFrame: DataFrame with added ratio columns.
+        """
+        print("Calculating financial ratios...")
+        df2 = df.copy()
+
+        # Calculate ratios
+        df2['deposit_ratio'] = df2['total_deposits'] / df2['total_assets']
+        df2['loan_to_deposit_ratio'] = df2['total_loans_and_leases'] / df2['total_deposits']
+        df2['loan_to_asset_ratio'] = df2['total_loans_and_leases'] / df2['total_assets']
+        df2['equity_to_asset_ratio'] = df2['total_equity'] / df2['total_assets']
+        df2['trading_assets_ratio'] = df2['trading_assets'] / df2['total_assets']
+        df2['net_interest_margin'] = (
+            df2['interest_income'] - df2['interest_expense']
+        ) / df2['total_assets']
+        df2['roe'] = df2['net_income'] / df2['total_equity']
+        df2['roa'] = df2['net_income'] / df2['total_assets']
+        df2[         'net_income_to_assets'] =  df2[         'net_income']  / df2['total_assets']
+        df2['net_interest_income_to_assets'] =  df2['net_interest_income']  / df2['total_assets']
+        df2[    'interest_income_to_assets'] =  df2[    'interest_income']  / df2['total_assets']
+        df2[    'interest_expense_to_assets'] = df2[    'interest_expense'] / df2['total_assets']
+        df2['non_interest_income_to_assets'] =  df2['non_interest_income']  / df2['total_assets']
+        df2['non_interest_expense_to_assets'] = df2['non_interest_expense'] / df2['total_assets']
+        df2['net_charge_offs_to_loans_and_leases'] = df2['net_charge_offs'] / df2['total_loans_and_leases']
+        df2['npl_ratio'] = df2['npl'] / df2['total_loans_and_leases']
+        df2['charge_off_ratio'] = df2['total_charge_offs'] / df2['total_loans_and_leases']
+        df2['allowance_for_loan_and_lease_losses_to_assets'] = (
+            df2['allowance_for_loan_and_lease_losses'] / df2['total_assets'])
+        df2['allowance_for_credit_losses_to_assets'] = (
+            df2['allowance_for_credit_losses'] / df2['total_assets'])
+        df2['provisions_for_credit_losses_to_assets'] = (
+            df2['provisions_for_credit_losses'] / df2['total_assets'])
+        df2['rwa_ratio'] = df2['total_rwa'] / df2['total_assets']
+        df2['dep_small_3m_less_to_assets'] = df2['dep_small_3m_less'] / df2['total_assets']
+        df2['dep_small_3m_1y_to_assets']   = df2['dep_small_3m_1y']   / df2['total_assets']
+        df2['dep_small_1y_3y_to_assets']   = df2['dep_small_1y_3y']   / df2['total_assets']
+        df2['dep_small_3y_more_to_assets'] = df2['dep_small_3y_more'] / df2['total_assets']
+        df2['dep_large_3m_less_to_assets'] = df2['dep_large_3m_less'] / df2['total_assets']
+        df2['dep_large_3m_1y_to_assets']   = df2['dep_large_3m_1y']   / df2['total_assets']
+        df2['dep_large_1y_3y_to_assets']   = df2['dep_large_1y_3y']   / df2['total_assets']
+        df2['dep_large_3y_more_to_assets'] = df2['dep_large_3y_more'] / df2['total_assets']
+
+
+        # Log total assets
+        df2['log_total_assets'] = np.log(df2['total_assets'].replace(0, np.nan).fillna(1e-9))
+
+        print("Financial ratios calculated.")
+        return df2
+
 
     def _select_features_and_target(self, df: pd.DataFrame) -> pd.DataFrame:
         """Selects only the target variable and base feature variables."""
         print("Selecting features and target variable...")
-        cols_to_select = self.feature_variables[:]
-        if self.target_variable not in cols_to_select:
-            cols_to_select.append(self.target_variable)
-        
+        cols_to_select = self.feature_variables[:] + self.target_variables[:]
+        cols_to_select = self.feature_variables[:] + self.target_variables[:]
         # Ensure all selected columns exist in the DataFrame
         existing_cols = [col for col in cols_to_select if col in df.columns]
         missing_cols = [col for col in cols_to_select if col not in df.columns]
@@ -195,7 +285,7 @@ class RegressionDataPreparer:
                 'max_date': df.index.get_level_values('date').max() if not df.empty else None
             }
         
-        self.df1_after_initial_cleaning = df.copy()
+        self.df1 = df.copy()
 
         # 3. Remove banks with not enough data, based on total assets
         minimum_observations_per_bank = self.config.get('MIN_OBS_PER_BANK', 1)
@@ -227,6 +317,129 @@ class RegressionDataPreparer:
 
         return df, stats_summary
 
+
+    def _fill_intermittent_missing_values(
+        self, # Add self as the first parameter
+        df_input: pd.DataFrame, 
+        columns_to_check: Union[str, List[str]],
+        id_col: str = 'id',
+        date_col: str = 'date'
+    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        Identifies and forward-fills intermittent missing values in specified columns of a DataFrame.
+
+        An intermittent missing value is defined as a NaN at time t, 
+        with non-NaN values at t-1 and t+1 for the same id.
+        These intermittent NaNs are filled with the value from t-1.
+
+        Args:
+            df_input (pd.DataFrame): Input DataFrame. Must contain id_col and date_col.
+            columns_to_check (Union[str, List[str]]): Column name(s) to check and fill.
+            id_col (str): Name of the identifier column (e.g., 'id').
+            date_col (str): Name of the date column.
+
+        Returns:
+            Tuple[pd.DataFrame, pd.DataFrame]: 
+                - df_filled (pd.DataFrame): The DataFrame with intermittent missing values filled.
+                - fill_summary_df (pd.DataFrame): A DataFrame with 'date' and 'count_filled' 
+                                                (total intermittent NaNs filled on that date across all checked columns).
+        """
+        df = df_input.copy()
+        df = self.rectangularize_dataframe(df)  # Ensure DataFrame is rectangular
+        if isinstance(columns_to_check, str):
+            columns_to_check = [columns_to_check]
+
+        all_fill_details = [] # To store (date) for each filled value to create summary
+
+        for col_name in columns_to_check:
+            if col_name not in df.columns:
+                print(f"Intermittent missing value filling warning: Column '{col_name}' not found in DataFrame. Skipping.")
+                continue
+
+            # Sort by index levels if id_col and date_col are part of the index
+            df = df.sort_index(level=[id_col, date_col])
+            prev_val_col_temp = f'_{col_name}_prev_temp_fill'
+            next_val_col_temp = f'_{col_name}_next_temp_fill'
+            df[prev_val_col_temp] = df.groupby(level=id_col)[col_name].shift(1)
+            df[next_val_col_temp] = df.groupby(level=id_col)[col_name].shift(-1)
+            df_check = df[['total_assets', prev_val_col_temp, next_val_col_temp]].copy()
+            intermittent_missing_mask = (df[col_name].isna() & df[prev_val_col_temp].notna() & df[next_val_col_temp].notna())
+            if intermittent_missing_mask.sum() > 0:
+                # Get date values from the index level
+                dates_of_fills_for_col = df.loc[intermittent_missing_mask].index.get_level_values(date_col)
+                for date_val in dates_of_fills_for_col: all_fill_details.append({'date': date_val})
+                df.loc[intermittent_missing_mask, col_name] = df.loc[intermittent_missing_mask, prev_val_col_temp]
+            df.drop(columns=[prev_val_col_temp, next_val_col_temp], inplace=True)
+
+        fill_summary_df = pd.DataFrame(columns=[date_col, 'count_filled'])
+        if all_fill_details:
+            fill_summary_df = pd.DataFrame(all_fill_details).groupby(date_col).size().reset_index(name='count_filled').sort_values(by=date_col)
+        # Ensure the output summary DataFrame has a 'date' column as per docstring
+
+        # Revert rectangularization, delete all rows with NaN in total_assets
+        df = df[df['total_assets'].notna()]
+
+        return df, fill_summary_df.rename(columns={date_col: 'date'}) if date_col != 'date' and not fill_summary_df.empty else fill_summary_df
+
+    def _calculate_financial_ratios(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Calculates various financial ratios and adds them as new columns to the DataFrame.
+
+        Args:
+            df (pd.DataFrame): DataFrame with necessary columns
+                            (e.g., total_deposits, total_assets, etc.).
+
+        Returns:
+            pd.DataFrame: DataFrame with added ratio columns.
+        """
+        print("Calculating financial ratios...")
+        df2 = df.copy()
+
+        # Calculate ratios
+        df2['deposit_ratio'] = df2['total_deposits'] / df2['total_assets']
+        df2['loan_to_deposit_ratio'] = df2['total_loans_and_leases'] / df2['total_deposits']
+        df2['loan_to_asset_ratio'] = df2['total_loans_and_leases'] / df2['total_assets']
+        df2['equity_to_asset_ratio'] = df2['total_equity'] / df2['total_assets']
+        df2['trading_assets_ratio'] = df2['trading_assets'] / df2['total_assets']
+        df2['net_interest_margin'] = (
+            df2['interest_income'] - df2['interest_expense']
+        ) / df2['total_assets']
+        df2['roe'] = df2['net_income'] / df2['total_equity']
+        df2['roa'] = df2['net_income'] / df2['total_assets']
+        df2[         'net_income_to_assets'] =  df2[         'net_income']  / df2['total_assets']
+        df2['net_interest_income_to_assets'] =  df2['net_interest_income']  / df2['total_assets']
+        df2[    'interest_income_to_assets'] =  df2[    'interest_income']  / df2['total_assets']
+        df2[    'interest_expense_to_assets'] = df2[    'interest_expense'] / df2['total_assets']
+        df2['non_interest_income_to_assets'] =  df2['non_interest_income']  / df2['total_assets']
+        df2['non_interest_expense_to_assets'] = df2['non_interest_expense'] / df2['total_assets']
+        df2['net_charge_offs_to_loans_and_leases'] = df2['net_charge_offs'] / df2['total_loans_and_leases']
+        df2['npl_ratio'] = df2['npl'] / df2['total_loans_and_leases']
+        df2['charge_off_ratio'] = df2['total_charge_offs'] / df2['total_loans_and_leases']
+        df2['allowance_for_loan_and_lease_losses_to_assets'] = (
+            df2['allowance_for_loan_and_lease_losses'] / df2['total_assets'])
+        df2['allowance_for_credit_losses_to_assets'] = (
+            df2['allowance_for_credit_losses'] / df2['total_assets'])
+        df2['provisions_for_credit_losses_to_assets'] = (
+            df2['provisions_for_credit_losses'] / df2['total_assets'])
+        df2['rwa_ratio'] = df2['total_rwa'] / df2['total_assets']
+        df2['dep_small_3m_less_to_assets'] = df2['dep_small_3m_less'] / df2['total_assets']
+        df2['dep_small_3m_1y_to_assets']   = df2['dep_small_3m_1y']   / df2['total_assets']
+        df2['dep_small_1y_3y_to_assets']   = df2['dep_small_1y_3y']   / df2['total_assets']
+        df2['dep_small_3y_more_to_assets'] = df2['dep_small_3y_more'] / df2['total_assets']
+        df2['dep_large_3m_less_to_assets'] = df2['dep_large_3m_less'] / df2['total_assets']
+        df2['dep_large_3m_1y_to_assets']   = df2['dep_large_3m_1y']   / df2['total_assets']
+        df2['dep_large_1y_3y_to_assets']   = df2['dep_large_1y_3y']   / df2['total_assets']
+        df2['dep_large_3y_more_to_assets'] = df2['dep_large_3y_more'] / df2['total_assets']
+
+
+        # Log total assets
+        df2['log_total_assets'] = np.log(df2['total_assets'].replace(0, np.nan).fillna(1e-9))
+
+        print("Financial ratios calculated.")
+
+        return df2
+
+
     def _winsorize_data(self, df: pd.DataFrame) -> pd.DataFrame:
         """Winsorizes specified columns of a DataFrame based on configuration."""
         df_out = df.copy()
@@ -254,18 +467,51 @@ class RegressionDataPreparer:
         print("Winsorization complete.")
         return df_out
 
-    def _remove_outliers(self, df: pd.DataFrame, target_col: str, threshold: float) -> pd.DataFrame:
-        print(f"Removing outliers from the target variable '{target_col}' using z-score threshold {threshold}...")
-        nr_rows_before = df.shape[0]
-        # Calculate z-scores, handle potential division by zero if std is 0
-        std_dev = df[target_col].std()
-        if std_dev == 0:
-            print(f"Warning: Standard deviation of '{target_col}' is zero. No outliers removed.")
-            return df.copy()
-        z_scores = np.abs((df[target_col] - df[target_col].mean()) / std_dev)
-        df_filtered = df[z_scores < threshold]
-        nr_rows_after = df_filtered.shape[0]
-        print(f"Observations before outlier removal: {nr_rows_before}, after: {nr_rows_after}. Removed: {nr_rows_before - nr_rows_after}")
+    def _remove_outliers(self, df: pd.DataFrame, target_cols: Union[str, List[str]], threshold: float) -> pd.DataFrame:
+        df_filtered = df.copy()
+        if isinstance(target_cols, str):
+            target_cols = [target_cols]
+
+        print(f"Removing outliers from target variable(s) using z-score threshold {threshold}...")
+        
+        for target_col in target_cols:
+            if target_col not in df_filtered.columns:
+                print(f"Warning: Target column '{target_col}' not found in DataFrame. Skipping outlier removal for this column.")
+                continue
+
+            if df_filtered.empty:
+                print(f"DataFrame is empty before processing '{target_col}'. Skipping.")
+                continue
+            
+            print(f"Processing outliers for '{target_col}'...")
+            nr_rows_before = df_filtered.shape[0]
+            
+            # Ensure column is numeric
+            if not pd.api.types.is_numeric_dtype(df_filtered[target_col]):
+                print(f"Warning: Column '{target_col}' is not numeric. Skipping outlier removal for this column.")
+                continue
+
+            # Calculate z-scores, handle potential division by zero if std is 0
+            std_dev = df_filtered[target_col].std()
+            if std_dev == 0 or pd.isna(std_dev):
+                print(f"Warning: Standard deviation of '{target_col}' is zero or NaN. No outliers removed for this column.")
+                continue # Skip this column
+            
+            mean_val = df_filtered[target_col].mean()
+            if pd.isna(mean_val):
+                print(f"Warning: Mean of '{target_col}' is NaN. No outliers removed for this column.")
+                continue
+
+            z_scores = np.abs((df_filtered[target_col] - mean_val) / std_dev)
+            
+            # Keep rows where z_score is less than threshold OR where z_score is NaN (i.e., original value was NaN)
+            # This ensures we don't drop rows just because the target_col was NaN.
+            df_filtered = df_filtered[(z_scores < threshold) | z_scores.isna()]
+            
+            nr_rows_after = df_filtered.shape[0]
+            print(f"  Observations for '{target_col}' before outlier removal: {nr_rows_before}, after: {nr_rows_after}. Removed: {nr_rows_before - nr_rows_after}")
+
+        print("Outlier removal process complete.")
         return df_filtered
         
     def _restrict_sample_logic(self, df_input: pd.DataFrame) -> pd.DataFrame:
@@ -341,33 +587,33 @@ class RegressionDataPreparer:
         return df_processed
 
 
-    def _prepare_data_with_lags_and_target(self, horizon: int) -> Tuple[Optional[pd.DataFrame], Optional[List[str]], Optional[str]]:
+    def _prepare_data_with_lags_and_target(self, horizon: int, current_target_variable: str) -> Tuple[Optional[pd.DataFrame], Optional[List[str]], Optional[str]]:
         
         # Check
-        if self.base_data_for_horizons is None or self.base_data_for_horizons.empty:
+        if self.final_data is None or self.final_data.empty:
             print(f"Base data is not prepared or is empty. Cannot generate data for horizon {horizon}.")
             return None, None, None 
 
-        df = self.base_data_for_horizons.copy()
+        df = self.final_data.copy()
         df = df.sort_index()
 
         ar_term_names = []
         # Create AR lags if configured
         if self.include_ar_lags and self.num_lags_to_include > 0:
             for lag_num in range(1, self.num_lags_to_include + 1):
-                ar_lag_col_name = f'{self.target_variable}_ar_lag_{lag_num}'
-                if self.target_variable in df.columns:
-                    df[ar_lag_col_name] = df.groupby(level='id', group_keys=False)[self.target_variable].shift(lag_num)
+                ar_lag_col_name = f'{current_target_variable}_ar_lag_{lag_num}'
+                if current_target_variable in df.columns:
+                    df[ar_lag_col_name] = df.groupby(level='id', group_keys=False)[current_target_variable].shift(lag_num)
                     ar_term_names.append(ar_lag_col_name)
                 else:
-                    print(f"Warning: Target variable '{self.target_variable}' not found in base data. Cannot create AR lags.")
+                    print(f"Warning: Target variable '{current_target_variable}' not found in base data. Cannot create AR lags.")
                     return df, [], "" 
 
-        shifted_target_col = f'{self.target_variable}_target_h{horizon}'
-        if self.target_variable in df.columns:
-             df[shifted_target_col] = df.groupby(level='id', group_keys=False)[self.target_variable].shift(-horizon)
+        shifted_target_col = f'{current_target_variable}_target_h{horizon}'
+        if current_target_variable in df.columns:
+             df[shifted_target_col] = df.groupby(level='id', group_keys=False)[current_target_variable].shift(-horizon)
         else:
-             print(f"Warning: Target variable '{self.target_variable}' not found in base data. Cannot create shifted target for H{horizon}.")
+             print(f"Warning: Target variable '{current_target_variable}' not found in base data. Cannot create shifted target for H{horizon}.")
              return df, ar_term_names, "" # Return empty string for shifted_target_col if failed
         
         return df, ar_term_names, shifted_target_col
@@ -455,17 +701,23 @@ class RegressionDataPreparer:
     def _add_feature_lags_internal(self, df_to_lag: pd.DataFrame, num_features_to_lag: List[str], num_lags: int) -> Tuple[pd.DataFrame, List[str]]:
         """Helper to add lags to specified numeric features within a DataFrame."""
         df_out = df_to_lag.copy()
+        new_lagged_cols_dict = {}
         lagged_names: List[str] = []
+
         if num_lags > 0 and not df_out.empty:
             for feat_name in num_features_to_lag: 
                 if feat_name in df_out.columns:
                     for lag_i in range(1, num_lags + 1):
                         lag_col = f"{feat_name}_lag_{lag_i}"
-                        df_out[lag_col] = df_out.groupby(level='id', group_keys=False)[feat_name].shift(lag_i)
+                        # Store new columns in a dictionary first
+                        new_lagged_cols_dict[lag_col] = df_out.groupby(level='id', group_keys=False)[feat_name].shift(lag_i)
                         lagged_names.append(lag_col)
                 else:
                      print(f"Warning: Feature '{feat_name}' not found in DataFrame for lagging.")
-        return df_out, lagged_names
+            # Concatenate all new lagged columns at once
+            if new_lagged_cols_dict:
+                df_out = pd.concat([df_out, pd.DataFrame(new_lagged_cols_dict, index=df_out.index)], axis=1)
+        return df_out.copy(), lagged_names # Add .copy() to ensure de-fragmentation
 
     def _combine_features_and_align_target(
         self, 
@@ -591,28 +843,26 @@ class RegressionDataPreparer:
         return X_train_final, X_test_final
 
 
-    def get_horizon_specific_data(self, horizon: int) -> Tuple[
+
+    def get_horizon_specific_data(self, horizon: int, target_variable: str) -> Tuple[
         Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[pd.Series], Optional[pd.Series], Optional[pd.DataFrame], Optional[pd.DataFrame],
     ]: # Changed X_train_prophet, X_test_prophet to X_train_main_unscaled, X_test_main_unscaled
-        print(f"--- Preparing Data for Horizon H{horizon} ---")
+        print(f"--- Preparing Data for Target: {target_variable}, Horizon H{horizon} ---")
 
         # Check
-        if self.base_data_for_horizons is None or self.base_data_for_horizons.empty:
+        if self.final_data is None or self.final_data.empty:
             print("Base data is not prepared or is empty. Cannot generate data for any horizon.")
             return None, None, None, None, None, None
 
-        df, ar_term_names, shifted_target_col = self._prepare_data_with_lags_and_target(horizon)
+        df, ar_term_names, shifted_target_col = self._prepare_data_with_lags_and_target(horizon, target_variable)
         
         # Check
         if df is None or not shifted_target_col:
-             print(f"Data preparation failed after adding lags/target for H{horizon}. Skipping.")
+             print(f"Data preparation failed after adding lags/target for {target_variable}, H{horizon}. Skipping.")
              return None, None, None, None, None, None
 
         df1 = df.copy() 
-        features = [
-            f for f in self.final_feature_list
-            if f != self.target_variable 
-        ]
+        features = self.final_feature_list[:] # self.final_feature_list is already curated not to include self.target_variable
         numeric_features = [
             f for f in features
             if pd.api.types.is_numeric_dtype(df1[f]) and f in df1.columns # Ensure column exists
@@ -631,7 +881,7 @@ class RegressionDataPreparer:
         rows_before_na_drop = len(df1)
         df_h_filtered = df1.dropna(subset=cols_to_check_for_na_existing).copy()
         
-        if df_h_filtered.empty:
+        if df_h_filtered.empty: # Check if empty after NaN drop
             print(f"DataFrame empty for H{horizon} after initial NaN drop. Skipping.")
             return None, None, None, None, None, None
 
@@ -642,22 +892,21 @@ class RegressionDataPreparer:
         unique_cols_for_X_pre_lag_full = sorted(list(set(str(c) for c in cols_for_X_pre_lag_full)))
         existing_cols_in_df_h_filtered = [c for c in unique_cols_for_X_pre_lag_full if c in df_h_filtered.columns]
         
-        if not existing_cols_in_df_h_filtered:
+        if not existing_cols_in_df_h_filtered: # Check if any features exist for X
             print(f"Error: No features found for X_pre_lag_full from df_h_filtered for H{horizon} (cols sought: {unique_cols_for_X_pre_lag_full}). Skipping.")
             return None, None, None, None, None, None
         X_pre_lag_full = df_h_filtered[existing_cols_in_df_h_filtered].copy()
 
-        if shifted_target_col not in df_h_filtered.columns:
+        if shifted_target_col not in df_h_filtered.columns: # Check if target column exists
              print(f"Error: Shifted target column '{shifted_target_col}' not found after processing for H{horizon}. Skipping.")
              return None, None, None, None, None, None
         y_full = df_h_filtered[shifted_target_col]
 
-        if X_pre_lag_full.empty or y_full.empty or len(X_pre_lag_full) != len(y_full):
+        if X_pre_lag_full.empty or y_full.empty or len(X_pre_lag_full) != len(y_full): # Check before split
             print(f"X_pre_lag_full or y_full empty or mismatched for H{horizon} before split. Skipping.")
             return None, None, None, None, None, None
 
         X_train_pre_lag, X_test_pre_lag, y_train_full, y_test_full = self._perform_train_test_split(X_pre_lag_full, y_full)
-
 
         if X_train_pre_lag is None or X_train_pre_lag.empty or y_train_full is None or y_train_full.empty:
             print(f"Train set empty after split for H{horizon}. Skipping.")
@@ -678,14 +927,14 @@ class RegressionDataPreparer:
             horizon, numeric_features_for_lags_present, categorical_model_features, self.num_lags_to_include) # Pass present numeric features
 
         if X_train_main_unscaled is None or X_train_main_unscaled.empty:
-            print(f"Train set (unscaled) became empty after combining features for H{horizon}. Skipping.")
+            print(f"Train set (unscaled) became empty after combining features for {target_variable}, H{horizon}. Skipping.")
             return None, None, None, None, None, None
 
 
         X_train_final, X_test_final = self._scale_and_encode_features(X_train_main_unscaled, X_test_main_unscaled)
 
         if X_train_final is None or X_train_final.empty:
-             print(f"Train set became empty after scaling/OHE for H{horizon}. Skipping.")
+             print(f"Train set became empty after scaling/OHE for {target_variable}, H{horizon}. Skipping.")
              return None, None, None, None, None, None
 
         print(f"Data preparation for H{horizon} complete. Train shape: {X_train_final.shape}, Test shape: {X_test_final.shape if X_test_final is not None else 'N/A'}")
