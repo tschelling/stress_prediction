@@ -4,14 +4,11 @@ import warnings
 import matplotlib.pyplot as plt
 import seaborn as sns # Make sure seaborn is imported if used in plot_features_timeseries_flat
 from typing import List, Dict, Any # For type hinting
-from sklearn.feature_selection import RFE
-from sklearn.pipeline import Pipeline
 from sklearn.model_selection import TimeSeriesSplit, GridSearchCV, RandomizedSearchCV
 from sklearn.ensemble import VotingRegressor
 from xgboost import XGBRegressor
 import joblib
 import os
-from IPython.display import display
 # import math # No longer used directly in this script for plotting
 
 # Added for Neural Network
@@ -31,7 +28,8 @@ importlib.reload(regression_data_preparer)  # Ensure the latest version of Panel
 from regression_data_preparer import RegressionDataPreparer
 from sklearn.base import clone # Added for VotingRegressor
 
-from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error # Import mean_absolute_error
+from lightgbm import LGBMRegressor
+from catboost import CatBoostRegressor
 
 
 #--------------------------------------------------------------------------------------------------------------------
@@ -75,7 +73,7 @@ c = {
     'CORRECT_STRUCTURAL_BREAKS_TOTAL_ASSETS': True,                
     'DATA_BEGIN': None, #'2017-01-01',                              
     'DATA_END': None,                                  
-    'RESTRICT_TO_NUMBER_OF_BANKS': 50,                 
+    'RESTRICT_TO_NUMBER_OF_BANKS': 200,                 
     'RESTRICT_TO_BANK_SIZE': None,                      
     'RESTRICT_TO_MINIMAL_DEPOSIT_RATIO': None,          
     'RESTRICT_TO_MAX_CHANGE_IN_DEPOSIT_RATIO': None,     
@@ -90,8 +88,8 @@ c = {
 # --- Model Selection ---
 # Options: None (all defined models), or a list of model names, e.g., ["XGBoost", "Ridge", "NeuralNetwork"]
 # Available models: "XGBoost", "RandomForest", "DecisionTree", "Lasso", "Ridge", "ElasticNet", 
-#                   "LinearRegression", "NeuralNetwork", "DummyRegressor", "RFE_Pipeline_RF"
-MODELS_TO_RUN = ["LinearRegression", "XGBoost", "DecisionTree", "RandomForest", 
+#                   "LinearRegression", "NeuralNetwork", "DummyRegressor", "RFE_Pipeline_RF", "LightGBM", "CatBoost"
+MODELS_TO_RUN = ["LinearRegression", "XGBoost", "DecisionTree", "RandomForest", "LightGBM", "CatBoost",
                  "RFE_Pipeline_RF", "RFE_Pipeline_LR", "RFE_DTR_Pipeline_RF", "RFE_DTR_Pipeline_LR"] 
 
 
@@ -102,7 +100,7 @@ USE_RANDOM_SEARCH_CV = True
 N_ITER_RANDOM_SEARCH = 10
 
 # --- Ensemble Configuration ---
-POTENTIAL_BASE_MODELS_FOR_ENSEMBLE = ["XGBoost", "RandomForest", "DecisionTree"]
+POTENTIAL_BASE_MODELS_FOR_ENSEMBLE = ["XGBoost", "RandomForest", "DecisionTree", "LightGBM", "CatBoost"]
 
 # --- TensorFlow/Keras Specifics ---
 if tf.config.list_physical_devices('GPU'):
@@ -250,6 +248,8 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
             ('rfe', RFE(estimator=DecisionTreeRegressor(max_depth=5, random_state=42), n_features_to_select=None)),
             ('LinearRegression', LinearRegression())
         ]),
+        "LightGBM": LGBMRegressor(random_state=42, n_jobs=-1, verbose=-1),
+        "CatBoost": CatBoostRegressor(random_state=42, verbose=0, allow_writing_files=False),
     }
 
     # Estimate max number of features for RFE tuning range
@@ -321,6 +321,22 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
             "RFE_DTR_Pipeline_LR": { # Param grid for new RFE_DTR_Pipeline_LR
                 'rfe__n_features_to_select': randint(max(1, approx_max_features // 4), max(2, approx_max_features + 1)),
                 # 'LinearRegression__fit_intercept': [True, False]
+            },
+            "LightGBM": {
+                'n_estimators': randint(50, 300),
+                'learning_rate': uniform(0.01, 0.2), # 0.01 to 0.21
+                'num_leaves': randint(20, 100),
+                'max_depth': [-1] + list(range(3, 15)),
+                'subsample': uniform(0.6, 0.4), # 0.6 to 1.0
+                'colsample_bytree': uniform(0.6, 0.4), # 0.6 to 1.0
+            },
+            "CatBoost": {
+                'iterations': randint(50, 300),
+                'learning_rate': uniform(0.01, 0.2),
+                'depth': randint(3, 10),
+                'l2_leaf_reg': uniform(1, 10), # 1 to 11
+                'border_count': [32, 64, 128], # For numerical features
+                'subsample': uniform(0.6, 0.4), # if bootstrap_type is 'Bernoulli' or 'Poisson'
             }
         }
     else: 
@@ -375,6 +391,19 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
             "RFE_DTR_Pipeline_LR": { # Param grid for new RFE_DTR_Pipeline_LR (GridSearch)
                 'rfe__n_features_to_select': [max(1, approx_max_features // 3), max(1, approx_max_features * 2 // 3), approx_max_features],
                 # 'LinearRegression__fit_intercept': [True, False]
+            },
+            "LightGBM": {
+                'n_estimators': [50, 150],
+                'learning_rate': [0.01, 0.1],
+                'num_leaves': [31, 60],
+                'max_depth': [-1, 10],
+            },
+            "CatBoost": {
+                'iterations': [100, 200],
+                'learning_rate': [0.03, 0.1],
+                'depth': [4, 6, 8],
+                'l2_leaf_reg': [3, 5],
+                'border_count': [64],
             }
         }
     return models, param_grids
