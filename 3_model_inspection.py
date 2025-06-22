@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns # Added for new bar plot
 import joblib
 import os
 import math
@@ -12,7 +13,7 @@ from sklearn.pipeline import Pipeline
 # import tensorflow as tf # Required if loading Keras models directly
 
 # --- Configuration ---
-ARTIFACTS_BASE_DIR = "model_run_artifacts_run_1"  # Should match 2_regressions.py
+ARTIFACTS_BASE_DIR = "models_and_results1"  # Should match 2_regressions.py
 TOP_N_FEATURES = 10  # For feature importance plots
 MODELS_FOR_FI_PLOT = ["XGBoost", "RandomForest", "DecisionTree", "RFE_Pipeline_RF"]
 
@@ -354,6 +355,81 @@ if __name__ == "__main__":
                 plt.show()
             else:
                 print(f"\nCannot plot RMSE vs Horizon for target '{first_target_for_plot}': No valid Test_RMSE data.")
+
+        # --- New Plot: Horizontal Bar Chart of Test_RMSE per Target Variable ---
+        if not metrics_df.empty and 'Test_RMSE' in metrics_df.columns and \
+           'TargetVariable' in metrics_df.columns and 'Model' in metrics_df.columns:
+            
+            plot_data_rmse_bars = metrics_df.dropna(subset=['Test_RMSE'])
+
+            if not plot_data_rmse_bars.empty:
+                num_unique_targets = plot_data_rmse_bars['TargetVariable'].nunique()
+                g = sns.FacetGrid(plot_data_rmse_bars, col='TargetVariable', 
+                                  col_wrap=min(3, num_unique_targets if num_unique_targets > 0 else 1), 
+                                  height=5, aspect=1.2, sharey=False, sharex=False)
+
+                def plot_sorted_rmse_bars(data, **kwargs):
+                    ax = plt.gca()
+                    data_to_plot = data.copy()
+                    data_to_plot['display_model_name'] = data_to_plot['Model']
+                    data_to_plot['plot_Test_RMSE'] = data_to_plot['Test_RMSE']
+
+                    # Clipping logic for LinearRegression
+                    if 'LinearRegression' in data_to_plot['Model'].values:
+                        lr_indices = data_to_plot['Model'] == 'LinearRegression'
+                        lr_rmse_mean = data_to_plot.loc[lr_indices, 'Test_RMSE'].mean()
+                        
+                        other_models_rmses = data_to_plot.loc[~lr_indices, 'Test_RMSE']
+                        if not other_models_rmses.empty:
+                            max_other_rmse = other_models_rmses.max() # Max of means if multiple horizons
+                            # If LR's mean RMSE is 20% worse than the max of other models' mean RMSEs
+                            if lr_rmse_mean > max_other_rmse * 1.2:
+                                clip_value = max_other_rmse * 1.1 # Clip to 10% worse
+                                data_to_plot.loc[lr_indices, 'plot_Test_RMSE'] = clip_value
+                                data_to_plot.loc[lr_indices, 'display_model_name'] = 'LinearRegression (clipped)'
+                                print(f"Info: Clipped LinearRegression RMSE from {lr_rmse_mean:.2f} to {clip_value:.2f} for target {data['TargetVariable'].iloc[0]}")
+
+                    # Sort models by their (potentially clipped) mean Test_RMSE
+                    # Group by display_model_name to handle the "(clipped)" case correctly for sorting
+                    sorted_models_by_rmse = data_to_plot.groupby('display_model_name')['plot_Test_RMSE'].mean().sort_values(ascending=True).index
+                    
+                    sns.barplot(x='Test_RMSE', y='Model', data=data, orient='h', 
+                                order=sorted_models_by_rmse, estimator=np.mean, errorbar=None, **kwargs)
+                    # Annotate bars with R2 and MAPE
+                    for i, patch in enumerate(ax.patches):
+                        display_name_on_bar = sorted_models_by_rmse[i] # This is the 'display_model_name'
+                        original_model_name = display_name_on_bar.replace(" (clipped)", "")
+                        
+                        # Get mean R2 and MAPE for the original model name from the facet's data
+                        model_metrics_in_facet = data[data['Model'] == original_model_name]
+                        r2_val = model_metrics_in_facet['Test_R2'].mean()
+                        mape_val = model_metrics_in_facet['Test_MAPE'].mean()
+
+                        bar_end_x = patch.get_width()
+                        bar_y_center = patch.get_y() + patch.get_height() / 2.0
+                        text_content = f"R² {r2_val:.2f}\nMAPE {mape_val:.1f}%"
+                        
+                        text_x = bar_end_x * 0.98
+                        ha = 'right'
+                        text_color = 'white'
+                        if bar_end_x < (ax.get_xlim()[1] * 0.25): # If bar is short
+                            text_x = bar_end_x + (ax.get_xlim()[1] * 0.01)
+                            ha = 'left'
+                            text_color = 'black'
+                        
+                        ax.text(text_x, bar_y_center, text_content, 
+                                ha=ha, va='center', color=text_color, fontsize=6, fontweight='bold')
+
+                g.map_dataframe(plot_sorted_rmse_bars)
+
+                g.set_titles("Target: {col_name}")
+                g.set_xlabels("Test RMSE")
+                g.set_ylabels("Model")
+                g.fig.suptitle("Model Performance (Mean Test RMSE) by Target Variable", fontsize=16, y=1.03)
+                g.tight_layout(rect=[0, 0, 1, 0.97])
+                plt.show()
+            else:
+                print("\nCannot plot Test_RMSE bars: No valid data after filtering NaNs for Test_RMSE.")
     else:
         print("\nNo metrics were calculated to display.")
 

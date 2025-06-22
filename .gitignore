@@ -5,7 +5,9 @@
 *.csv
 *.xlsx
 *.pdf
+*.pyc
 /.vscode
-/model_run_artifacts_test3
+/models_and_results
+/models_and_results1
 /model_run_artifacts_run_1
 /venv_cas

@@ -48,15 +48,27 @@ TARGET_VARIABLES = {'interest_income_to_assets':'bank', 'interest_expense_to_ass
 FEATURE_VARIABLES = {'deposit_ratio':'bank', 'loan_to_asset_ratio':'bank', 'log_total_assets':'bank', 
                      'cpi_qoq':'macro',      'gdp_qoq':'macro',     'unemployment':'macro', 'household_delinq':'macro', 
                      'tbill_3m':'macro',     'tbill_10y':'macro', 'sp500_qoq':'macro',
-                     'corp_bond_spread':'macro', 'vix_qoq':'macro', 'is_structural_break':'bank'
-                     # 'dep_small_3m_less_to_assets',
-                     # 'dep_small_3m_1y_to_assets',
-                     # 'dep_small_1y_3y_to_assets',
-                     # 'dep_small_3y_more_to_assets',
-                     # 'dep_large_3m_less_to_assets',
-                     # 'dep_large_3m_1y_to_assets', 
-                     # 'dep_large_1y_3y_to_assets',
-                     # 'dep_large_3y_more_to_assets'
+                     'corp_bond_spread':'macro', 'vix_qoq':'macro', 'is_structural_break':'bank',
+                     # 'dep_small_3m_less_to_assets':'bank',
+                     # 'dep_small_3m_1y_to_assets':'bank',
+                     # 'dep_small_1y_3y_to_assets':'bank',
+                     # 'dep_small_3y_more_to_assets':'bank',
+                     # 'dep_large_3m_less_to_assets':'bank',
+                     # 'dep_large_3m_1y_to_assets':'bank',
+                     # 'dep_large_1y_3y_to_assets':'bank',
+                     # 'dep_large_3y_more_to_assets':'bank', 
+                     # 'closed_end_first_liens_1_4_res_prop_3m_less_to_assets':'bank',
+                     # 'closed_end_first_liens_1_4_res_prop_3m_1y_to_assets':'bank',
+                     # 'closed_end_first_liens_1_4_res_prop_1y_3y_to_assets':'bank',
+                     # 'closed_end_first_liens_1_4_res_prop_3y_5y_to_assets':'bank',
+                     # 'closed_end_first_liens_1_4_res_prop_5y_15y_to_assets':'bank',
+                     # 'closed_end_first_liens_1_4_res_prop_15y_more_to_assets':'bank',
+                     # 'all_other_loans_3m_less_to_assets':'bank',
+                     # 'all_other_loans_3m_1y_to_assets':'bank',
+                     # 'all_other_loans_1y_3y_to_assets':'bank',
+                     # 'all_other_loans_3y_5y_to_assets':'bank',
+                     # 'all_other_loans_5y_15y_to_assets':'bank',
+                     # 'all_other_loans_15y_more_to_assets':'bank'
                      } # Added more macro vars
 FORECAST_HORIZONS = list(range(1, 2))
 # Get feature variables as a list
@@ -71,9 +83,9 @@ c = {
     'OUTLIER_THRESHOLD_TARGET': 3.0,                    
     'MIN_OBS_PER_BANK': 12,             
     'CORRECT_STRUCTURAL_BREAKS_TOTAL_ASSETS': True,                
-    'DATA_BEGIN': None, #'2017-01-01',                              
+    'DATA_BEGIN': '2017-01-01',                              
     'DATA_END': None,                                  
-    'RESTRICT_TO_NUMBER_OF_BANKS': 200,                 
+    'RESTRICT_TO_NUMBER_OF_BANKS': 100,                 
     'RESTRICT_TO_BANK_SIZE': None,                      
     'RESTRICT_TO_MINIMAL_DEPOSIT_RATIO': None,          
     'RESTRICT_TO_MAX_CHANGE_IN_DEPOSIT_RATIO': None,     
@@ -89,15 +101,15 @@ c = {
 # Options: None (all defined models), or a list of model names, e.g., ["XGBoost", "Ridge", "NeuralNetwork"]
 # Available models: "XGBoost", "RandomForest", "DecisionTree", "Lasso", "Ridge", "ElasticNet", 
 #                   "LinearRegression", "NeuralNetwork", "DummyRegressor", "RFE_Pipeline_RF", "LightGBM", "CatBoost"
-MODELS_TO_RUN = ["LinearRegression", "XGBoost", "DecisionTree", "RandomForest", "LightGBM", "CatBoost",
-                 "RFE_Pipeline_RF", "RFE_Pipeline_LR", "RFE_DTR_Pipeline_RF", "RFE_DTR_Pipeline_LR"] 
+MODELS_TO_RUN = ["LinearRegression", "XGBoost", "RandomForest",
+                 "RFE_Pipeline_RF", "RFE_Pipeline_LR"] #"RFE_DTR_Pipeline_RF", "RFE_DTR_Pipeline_LR"] 
 
 
 
 # --- Cross-validation & Hyperparameter Tuning ---
 N_SPLITS_CV = 3
 USE_RANDOM_SEARCH_CV = True 
-N_ITER_RANDOM_SEARCH = 10
+N_ITER_RANDOM_SEARCH = 20
 
 # --- Ensemble Configuration ---
 POTENTIAL_BASE_MODELS_FOR_ENSEMBLE = ["XGBoost", "RandomForest", "DecisionTree", "LightGBM", "CatBoost"]
@@ -110,7 +122,7 @@ if tf.config.list_physical_devices('GPU'):
 
 # --- Artifact Storage & Display ---
 SAVE_ARTIFACTS = True
-ARTIFACTS_BASE_DIR = "model_run_artifacts_run_1"
+ARTIFACTS_BASE_DIR = "models_and_results1"
 PLOT_RESULT_CHARTS = False
 PRINT_FINAL_SUMMARY = True
 

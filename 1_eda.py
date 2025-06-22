@@ -15,15 +15,27 @@ TARGET_VARIABLES = {'interest_income_to_assets':'bank', 'interest_expense_to_ass
 FEATURE_VARIABLES = {'deposit_ratio':'bank', 'loan_to_asset_ratio':'bank', 'log_total_assets':'bank', 
                      'cpi_qoq':'macro',      'gdp_qoq':'macro',     'unemployment':'macro', 'household_delinq':'macro', 
                      'tbill_3m':'macro',     'tbill_10y':'macro',   'spread_10y_3m':'macro', 'sp500_qoq':'macro',
-                     'corp_bond_spread':'macro', 'vix_qoq':'macro', 'is_structural_break':'bank'
-                     # 'dep_small_3m_less_to_assets',
-                     # 'dep_small_3m_1y_to_assets',
-                     # 'dep_small_1y_3y_to_assets',
-                     # 'dep_small_3y_more_to_assets',
-                     # 'dep_large_3m_less_to_assets',
-                     # 'dep_large_3m_1y_to_assets', 
-                     # 'dep_large_1y_3y_to_assets',
-                     # 'dep_large_3y_more_to_assets'
+                     'corp_bond_spread':'macro', 'vix_qoq':'macro', 'is_structural_break':'bank',
+                     # 'dep_small_3m_less_to_assets':'bank',
+                     # 'dep_small_3m_1y_to_assets':'bank',
+                     # 'dep_small_1y_3y_to_assets':'bank',
+                     # 'dep_small_3y_more_to_assets':'bank',
+                     # 'dep_large_3m_less_to_assets':'bank',
+                     # 'dep_large_3m_1y_to_assets':'bank',
+                     # 'dep_large_1y_3y_to_assets':'bank',
+                     # 'dep_large_3y_more_to_assets':'bank', 
+                     # 'closed_end_first_liens_1_4_res_prop_3m_less_to_assets':'bank',
+                     # 'closed_end_first_liens_1_4_res_prop_3m_1y_to_assets':'bank',
+                     # 'closed_end_first_liens_1_4_res_prop_1y_3y_to_assets':'bank',
+                     # 'closed_end_first_liens_1_4_res_prop_3y_5y_to_assets':'bank',
+                     # 'closed_end_first_liens_1_4_res_prop_5y_15y_to_assets':'bank',
+                     # 'closed_end_first_liens_1_4_res_prop_15y_more_to_assets':'bank',
+                     # 'all_other_loans_3m_less_to_assets':'bank',
+                     # 'all_other_loans_3m_1y_to_assets':'bank',
+                     # 'all_other_loans_1y_3y_to_assets':'bank',
+                     # 'all_other_loans_3y_5y_to_assets':'bank',
+                     # 'all_other_loans_5y_15y_to_assets':'bank',
+                     # 'all_other_loans_15y_more_to_assets':'bank',
                      } # Added more macro vars
 FORECAST_HORIZONS = list(range(1, 2))
 # Get feature variables as a list
@@ -180,6 +192,67 @@ sns.heatmap(correlation_matrix, annot=True, fmt=".2f", cmap='coolwarm', square=T
 plt.title("Correlation Heatmap of Target and Feature Variables")
 plt.tight_layout()
 plt.show()
+
+# --- Plot Maturity Structures ---
+def plot_maturity_structure(df: pd.DataFrame):
+    """
+    Displays a stacked bar chart of deposit and loan maturities over time.
+    """
+    print("\n--- Plotting Deposit and Loan Maturity Structures ---------------------------------")
+    
+    # --- Data Preparation ---
+    df_maturities = pd.DataFrame(index=df.index)
+
+    # Sum deposit maturities
+    df_maturities['Deposits < 3m'] = df['dep_small_3m_less_to_assets'] + df['dep_large_3m_less_to_assets']
+    df_maturities['Deposits 3m-1y'] = df['dep_small_3m_1y_to_assets'] + df['dep_large_3m_1y_to_assets']
+    df_maturities['Deposits 1y-3y'] = df['dep_small_1y_3y_to_assets'] + df['dep_large_1y_3y_to_assets']
+    df_maturities['Deposits > 3y'] = df['dep_small_3y_more_to_assets'] + df['dep_large_3y_more_to_assets']
+    
+    # Sum loan maturities
+    df_maturities['Loans < 3m'] = df['closed_end_first_liens_1_4_res_prop_3m_less_to_assets'] + df['all_other_loans_3m_less_to_assets']
+    df_maturities['Loans 3m-1y'] = df['closed_end_first_liens_1_4_res_prop_3m_1y_to_assets'] + df['all_other_loans_3m_1y_to_assets']
+    df_maturities['Loans 1y-3y'] = df['closed_end_first_liens_1_4_res_prop_1y_3y_to_assets'] + df['all_other_loans_1y_3y_to_assets']
+    df_maturities['Loans 3y-5y'] = df['closed_end_first_liens_1_4_res_prop_3y_5y_to_assets'] + df['all_other_loans_3y_5y_to_assets']
+    df_maturities['Loans 5y-15y'] = df['closed_end_first_liens_1_4_res_prop_5y_15y_to_assets'] + df['all_other_loans_5y_15y_to_assets']
+    df_maturities['Loans > 15y'] = df['closed_end_first_liens_1_4_res_prop_15y_more_to_assets'] + df['all_other_loans_15y_more_to_assets']
+
+    # Add total ratios for comparison
+    df_maturities['Total Deposit Ratio'] = df['deposit_ratio']
+    df_maturities['Total Loan Ratio'] = df['loan_to_asset_ratio']
+
+    # Aggregate by date (mean across all banks)
+    agg_maturities = df_maturities.groupby('date').mean()
+
+    # --- Plotting ---
+    fig, axes = plt.subplots(2, 1, figsize=(14, 12), sharex=True)
+    
+    # Deposit Maturity Plot
+    deposit_cols = ['Deposits < 3m', 'Deposits 3m-1y', 'Deposits 1y-3y', 'Deposits > 3y']
+    agg_maturities[deposit_cols].plot(kind='bar', stacked=True, ax=axes[0], colormap='viridis')
+    agg_maturities['Total Deposit Ratio'].plot(ax=axes[0], color='red', linestyle='--', marker='o', markersize=4, label='Total Deposit Ratio (for comparison)')
+    axes[0].set_title('Deposit Maturity Structure (as % of Assets)')
+    axes[0].set_ylabel('Ratio to Assets')
+    axes[0].legend(title='Maturity Buckets')
+    
+    # Loan Maturity Plot
+    loan_cols = ['Loans < 3m', 'Loans 3m-1y', 'Loans 1y-3y', 'Loans 3y-5y', 'Loans 5y-15y', 'Loans > 15y']
+    agg_maturities[loan_cols].plot(kind='bar', stacked=True, ax=axes[1], colormap='plasma')
+    agg_maturities['Total Loan Ratio'].plot(ax=axes[1], color='blue', linestyle='--', marker='o', markersize=4, label='Total Loan Ratio (for comparison)')
+    axes[1].set_title('Loan Maturity Structure (as % of Assets)')
+    axes[1].set_ylabel('Ratio to Assets')
+    axes[1].legend(title='Maturity Buckets')
+
+    # Format x-axis ticks to be more readable
+    tick_labels = [item.strftime('%Y-Q%q') for item in agg_maturities.index]
+    axes[1].set_xticklabels(tick_labels, rotation=45, ha='right')
+    
+    plt.xlabel('Date')
+    plt.tight_layout()
+    plt.show()
+
+if 'dep_small_3m_less_to_assets' in FEATURE_VARIABLES:
+    plot_maturity_structure(df_final)
 
 # Look at the training and test sets
 print("\n--- Training and Test Sets Overview --------------------------------------------------")

@@ -73,6 +73,31 @@ deposit_structure_codes = {
 }
 
 
+# Loan structure
+
+loan_structure_codes = {
+    "RCONA564": "closed_end_first_liens_1_4_res_prop_3m_less",
+    "RCONA565": "closed_end_first_liens_1_4_res_prop_3m_1y",
+    "RCONA566": "closed_end_first_liens_1_4_res_prop_1y_3y",
+    "RCONA567": "closed_end_first_liens_1_4_res_prop_3y_5y", 
+    "RCONA568": "closed_end_first_liens_1_4_res_prop_5y_15y", 
+    "RCONA569": "closed_end_first_liens_1_4_res_prop_15y_more",
+    "RCFDA570": "all_other_loans_3m_less",
+    "RCFDA571": "all_other_loans_3m_1y",
+    "RCFDA572": "all_other_loans_1y_3y",
+    "RCFDA573": "all_other_loans_3y_5y", 
+    "RCFDA574": "all_other_loans_5y_15y", 
+    "RCFDA575": "all_other_loans_15y_more",
+}
+
+deposit_structure_codes = {
+    f"{prefix}{suffix}": name
+    for prefix in deposit_structure_prefix
+    for suffix, name in deposit_structure_suffix.items()
+}
+
+
+
 
 # Profitability
 income_statement_prefix = ["RIAD"]
@@ -84,6 +109,12 @@ income_statement_suffix = {
     "4093": "non_interest_expense",
     "4340": "net_income",
     "JJ33": "provisions_for_credit_losses",
+    "4070": "fiduciary_income",
+    "4080": "deposit_charge_income",
+    "A220": "trading_revenue",
+    "C888": "inv_banking_fee_commission_income",
+    "B497": "other non_interest_income",
+    "4135": "salaries_benefits_expense",
 }
 
 income_statement_codes = {
@@ -129,6 +160,7 @@ all_codes = {
     **time_entity_codes,
     **balance_sheet_codes,
     **deposit_structure_codes,
+    **loan_structure_codes,
     **income_statement_codes,
     **capital_codes,
     **risk_weighted_assets_codes,

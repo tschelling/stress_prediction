@@ -61,7 +61,6 @@ class RegressionDataPreparer:
         self.final_feature_list: List[str] = self.feature_variables[:]
         self._prepare_initial_data()
 
-
     def _prepare_initial_data(self):
         
         print(f"\n--- Merging data FRED, FDIC, yahoo ------------------------------------------------------------")
@@ -213,14 +212,25 @@ class RegressionDataPreparer:
         df2['dep_large_3m_1y_to_assets']   = df2['dep_large_3m_1y']   / df2['total_assets']
         df2['dep_large_1y_3y_to_assets']   = df2['dep_large_1y_3y']   / df2['total_assets']
         df2['dep_large_3y_more_to_assets'] = df2['dep_large_3y_more'] / df2['total_assets']
-
+        df2['closed_end_first_liens_1_4_res_prop_3m_less_to_assets']  = df2['closed_end_first_liens_1_4_res_prop_3m_less']  / df2['total_assets']
+        df2['closed_end_first_liens_1_4_res_prop_3m_1y_to_assets']    = df2['closed_end_first_liens_1_4_res_prop_3m_1y']    / df2['total_assets']
+        df2['closed_end_first_liens_1_4_res_prop_1y_3y_to_assets']    = df2['closed_end_first_liens_1_4_res_prop_1y_3y']    / df2['total_assets']
+        df2['closed_end_first_liens_1_4_res_prop_3y_5y_to_assets']    = df2['closed_end_first_liens_1_4_res_prop_3y_5y']    / df2['total_assets']
+        df2['closed_end_first_liens_1_4_res_prop_5y_15y_to_assets']   = df2['closed_end_first_liens_1_4_res_prop_5y_15y']   / df2['total_assets']
+        df2['closed_end_first_liens_1_4_res_prop_15y_more_to_assets'] = df2['closed_end_first_liens_1_4_res_prop_15y_more'] / df2['total_assets']
+        df2['all_other_loans_3m_less_to_assets']                      = df2['all_other_loans_3m_less']                      / df2['total_assets']
+        df2['all_other_loans_3m_1y_to_assets']                        = df2['all_other_loans_3m_1y']                        / df2['total_assets']
+        df2['all_other_loans_1y_3y_to_assets']                        = df2['all_other_loans_1y_3y']                        / df2['total_assets']
+        df2['all_other_loans_3y_5y_to_assets']                        = df2['all_other_loans_3y_5y']                        / df2['total_assets']
+        df2['all_other_loans_5y_15y_to_assets']                       = df2['all_other_loans_5y_15y']                       / df2['total_assets']
+        df2['all_other_loans_15y_more_to_assets']                     = df2['all_other_loans_15y_more']                     / df2['total_assets']
+    
 
         # Log total assets
         df2['log_total_assets'] = np.log(df2['total_assets'].replace(0, np.nan).fillna(1e-9))
 
         print("Financial ratios calculated.")
         return df2
-
 
     def _select_features_and_target(self, df: pd.DataFrame) -> pd.DataFrame:
         """Selects only the target variable and base feature variables."""
@@ -317,7 +327,6 @@ class RegressionDataPreparer:
 
         return df, stats_summary
 
-
     def _fill_intermittent_missing_values(
         self, # Add self as the first parameter
         df_input: pd.DataFrame, 
@@ -380,65 +389,6 @@ class RegressionDataPreparer:
         df = df[df['total_assets'].notna()]
 
         return df, fill_summary_df.rename(columns={date_col: 'date'}) if date_col != 'date' and not fill_summary_df.empty else fill_summary_df
-
-    def _calculate_financial_ratios(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Calculates various financial ratios and adds them as new columns to the DataFrame.
-
-        Args:
-            df (pd.DataFrame): DataFrame with necessary columns
-                            (e.g., total_deposits, total_assets, etc.).
-
-        Returns:
-            pd.DataFrame: DataFrame with added ratio columns.
-        """
-        print("Calculating financial ratios...")
-        df2 = df.copy()
-
-        # Calculate ratios
-        df2['deposit_ratio'] = df2['total_deposits'] / df2['total_assets']
-        df2['loan_to_deposit_ratio'] = df2['total_loans_and_leases'] / df2['total_deposits']
-        df2['loan_to_asset_ratio'] = df2['total_loans_and_leases'] / df2['total_assets']
-        df2['equity_to_asset_ratio'] = df2['total_equity'] / df2['total_assets']
-        df2['trading_assets_ratio'] = df2['trading_assets'] / df2['total_assets']
-        df2['net_interest_margin'] = (
-            df2['interest_income'] - df2['interest_expense']
-        ) / df2['total_assets']
-        df2['roe'] = df2['net_income'] / df2['total_equity']
-        df2['roa'] = df2['net_income'] / df2['total_assets']
-        df2[         'net_income_to_assets'] =  df2[         'net_income']  / df2['total_assets']
-        df2['net_interest_income_to_assets'] =  df2['net_interest_income']  / df2['total_assets']
-        df2[    'interest_income_to_assets'] =  df2[    'interest_income']  / df2['total_assets']
-        df2[    'interest_expense_to_assets'] = df2[    'interest_expense'] / df2['total_assets']
-        df2['non_interest_income_to_assets'] =  df2['non_interest_income']  / df2['total_assets']
-        df2['non_interest_expense_to_assets'] = df2['non_interest_expense'] / df2['total_assets']
-        df2['net_charge_offs_to_loans_and_leases'] = df2['net_charge_offs'] / df2['total_loans_and_leases']
-        df2['npl_ratio'] = df2['npl'] / df2['total_loans_and_leases']
-        df2['charge_off_ratio'] = df2['total_charge_offs'] / df2['total_loans_and_leases']
-        df2['allowance_for_loan_and_lease_losses_to_assets'] = (
-            df2['allowance_for_loan_and_lease_losses'] / df2['total_assets'])
-        df2['allowance_for_credit_losses_to_assets'] = (
-            df2['allowance_for_credit_losses'] / df2['total_assets'])
-        df2['provisions_for_credit_losses_to_assets'] = (
-            df2['provisions_for_credit_losses'] / df2['total_assets'])
-        df2['rwa_ratio'] = df2['total_rwa'] / df2['total_assets']
-        df2['dep_small_3m_less_to_assets'] = df2['dep_small_3m_less'] / df2['total_assets']
-        df2['dep_small_3m_1y_to_assets']   = df2['dep_small_3m_1y']   / df2['total_assets']
-        df2['dep_small_1y_3y_to_assets']   = df2['dep_small_1y_3y']   / df2['total_assets']
-        df2['dep_small_3y_more_to_assets'] = df2['dep_small_3y_more'] / df2['total_assets']
-        df2['dep_large_3m_less_to_assets'] = df2['dep_large_3m_less'] / df2['total_assets']
-        df2['dep_large_3m_1y_to_assets']   = df2['dep_large_3m_1y']   / df2['total_assets']
-        df2['dep_large_1y_3y_to_assets']   = df2['dep_large_1y_3y']   / df2['total_assets']
-        df2['dep_large_3y_more_to_assets'] = df2['dep_large_3y_more'] / df2['total_assets']
-
-
-        # Log total assets
-        df2['log_total_assets'] = np.log(df2['total_assets'].replace(0, np.nan).fillna(1e-9))
-
-        print("Financial ratios calculated.")
-
-        return df2
-
 
     def _winsorize_data(self, df: pd.DataFrame) -> pd.DataFrame:
         """Winsorizes specified columns of a DataFrame based on configuration."""
@@ -585,7 +535,6 @@ class RegressionDataPreparer:
         if df_processed.empty and initial_rows > 0:
             print("Warning: DataFrame became empty after sample restriction.")
         return df_processed
-
 
     def _prepare_data_with_lags_and_target(self, horizon: int, current_target_variable: str) -> Tuple[Optional[pd.DataFrame], Optional[List[str]], Optional[str]]:
         
@@ -841,8 +790,6 @@ class RegressionDataPreparer:
                  print(f"Error during scaling/OHE: {e}. Returning None for data.")
                  return None, None
         return X_train_final, X_test_final
-
-
 
     def get_horizon_specific_data(self, horizon: int, target_variable: str) -> Tuple[
         Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[pd.Series], Optional[pd.Series], Optional[pd.DataFrame], Optional[pd.DataFrame],
