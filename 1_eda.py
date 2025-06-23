@@ -10,12 +10,13 @@ importlib.reload(regression_data_preparer)  # Ensure the latest version of Panel
 from regression_data_preparer import RegressionDataPreparer
 
 TARGET_VARIABLES = {'interest_income_to_assets':'bank', 'interest_expense_to_assets':'bank',
-                   'non_interest_income_to_assets':'bank', 'non_interest_expense_to_assets':'bank',
+                   'non_interest_income_to_assets':'bank', 'non_interest_expense_to_assets':'bank', 'trading_assets_to_assets':'bank',
                    'net_charge_offs_to_loans_and_leases':'bank'}
-FEATURE_VARIABLES = {'deposit_ratio':'bank', 'loan_to_asset_ratio':'bank', 'log_total_assets':'bank', 
-                     'cpi_qoq':'macro',      'gdp_qoq':'macro',     'unemployment':'macro', 'household_delinq':'macro', 
-                     'tbill_3m':'macro',     'tbill_10y':'macro',   'spread_10y_3m':'macro', 'sp500_qoq':'macro',
-                     'corp_bond_spread':'macro', 'vix_qoq':'macro', 'is_structural_break':'bank',
+FEATURE_VARIABLES = {'deposit_ratio':'bank', 'loan_to_asset_ratio':'bank', 'dep_demand_to_assets':'bank',
+                     'loans_short_term_to_assets':'bank', 'log_total_assets':'bank', 
+                     'cpi_qoq':'macro',      'gdp_qoq':'macro',     'unemployment_diff':'macro', 'household_delinq_diff':'macro', 
+                     'tbill_3m_diff':'macro',     'tbill_10y_diff':'macro', 'sp500_qoq':'macro',
+                     'corp_bond_spread_diff':'macro', 'vix_qoq':'macro', 'is_structural_break':'bank',
                      # 'dep_small_3m_less_to_assets':'bank',
                      # 'dep_small_3m_1y_to_assets':'bank',
                      # 'dep_small_1y_3y_to_assets':'bank',
@@ -52,7 +53,7 @@ c = {
     'CORRECT_STRUCTURAL_BREAKS_TOTAL_ASSETS': True,                
     'DATA_BEGIN': None, #'2017-01-01',                              
     'DATA_END': None,                                  
-    'RESTRICT_TO_NUMBER_OF_BANKS': 500,                 
+    'RESTRICT_TO_NUMBER_OF_BANKS': None,                 
     'RESTRICT_TO_BANK_SIZE': None,                      
     'RESTRICT_TO_MINIMAL_DEPOSIT_RATIO': None,          
     'RESTRICT_TO_MAX_CHANGE_IN_DEPOSIT_RATIO': None,     
@@ -70,11 +71,11 @@ yahoo = pd.read_parquet('data/yahoo/yahoo.parquet')
 print("Data loaded.")
 
 
-data_preparer = RegressionDataPreparer(fred, fdic, yahoo, config=c)
+reg_data = RegressionDataPreparer(fred, fdic, yahoo, config=c)
 
-
+#region Missing value stats
 print("--- Missing value stats ----------------------------------------------------------------------------")
-df0 = data_preparer.rectangularize_dataframe(data_preparer.df1).reset_index()
+df0 = reg_data.rectangularize_dataframe(reg_data.df1).reset_index()
 
 data_information = {}
 
@@ -103,7 +104,7 @@ data_information['percentage_banks_with_full_data'] = banks_with_full_data / num
 print(f"Percentage of banks with full data: {data_information['percentage_banks_with_full_data']:.2f}%")
 
 # Number of banks removed with not enough observations
-nr_banks_removed_not_enough_data = data_preparer.data_processing_stats['bank_removal_not_enough_data']['banks_before'] - data_preparer.data_processing_stats['bank_removal_not_enough_data']['banks_after']
+nr_banks_removed_not_enough_data = reg_data.data_processing_stats['bank_removal_not_enough_data']['banks_before'] - reg_data.data_processing_stats['bank_removal_not_enough_data']['banks_after']
 data_information['banks_removed_insufficient_obs'] = nr_banks_removed_not_enough_data
 print(f"Number of banks removed due to not enough observations: {nr_banks_removed_not_enough_data}")
 
@@ -114,12 +115,13 @@ missing_total_assets_over_time.plot(title='Missing values in log total assets ov
 plt.show()
 print(f"\nData Information Dictionary:\n{data_information}")
 
+#endregion
 
 
-
+#region Plot variables over time
 print("\n--- Plotting Target and Feature Variables Over Time ---------------------------------")
 
-df_final = data_preparer.final_data
+df_final = reg_data.final_data
 
 plot_variables = list(TARGET_VARIABLES.keys()) + list(FEATURE_VARIABLES.keys())
 
@@ -169,6 +171,14 @@ for j in range(i + 1, len(axes_flat)): # Hide any unused subplots
 fig.suptitle("Target and Feature Variables Over Time", fontsize=16, y=1.02)
 plt.tight_layout(rect=[0, 0, 1, 0.98]) # Adjust layout to make space for suptitle
 plt.show()
+# Save the figure with date and time in front of the filename in the format YYYYMMDD_HHMM
+import datetime
+now = datetime.datetime.now()
+timestamp = now.strftime("%Y%m%d_%H%M")
+fig.savefig(f"plots/target_feature_variables_{timestamp}.png", bbox_inches='tight')
+
+
+#endregion
 
 
 # Make a correlation plot of the target and feature variables
@@ -257,5 +267,5 @@ if 'dep_small_3m_less_to_assets' in FEATURE_VARIABLES:
 # Look at the training and test sets
 print("\n--- Training and Test Sets Overview --------------------------------------------------")
 
-X_train_scaled_df, X_test_scaled_df, y_train, y_test, X_train_orig, X_test_orig = data_preparer.get_horizon_specific_data(horizon=1,
+X_train_scaled_df, X_test_scaled_df, y_train, y_test, X_train_orig, X_test_orig = reg_data.get_horizon_specific_data(horizon=1,
                                                                                                                           target_variable='interest_income_to_assets')

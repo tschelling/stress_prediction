@@ -64,6 +64,7 @@ deposit_structure_suffix = {
     "HK13": "dep_large_3m_1y", 
     "HK14": "dep_large_1y_3y", 
     "HK15": "dep_large_3y_more", 
+    "2210": "dep_demand"
 }
 
 deposit_structure_codes = {

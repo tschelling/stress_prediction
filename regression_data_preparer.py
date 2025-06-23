@@ -21,7 +21,10 @@ class RegressionDataPreparer:
         # Ensure feature_variables list does not contain the current target_variable
         _configured_features = list(self.config.get('FEATURE_VARIABLES').keys())[:]
         self.feature_variables: List[str] = [fv for fv in _configured_features if fv not in self.target_variables]
-        self.bank_variables =  list(var for var, var_type in self.config['FEATURE_VARIABLES'].items() if var_type == 'bank') + list(self.config['TARGET_VARIABLES'].keys())
+        self.bank_variables: List[str] = list(var for var, var_type in self.config['FEATURE_VARIABLES'].items() if var_type == 'bank') + list(self.config['TARGET_VARIABLES'].keys())
+        # Ensure total_assets is always considered a bank variable for feature engineering
+        if 'total_assets' not in self.bank_variables:
+            self.bank_variables.append('total_assets')
         self.macro_variables = list(var for var, var_type in self.config['FEATURE_VARIABLES'].items() if var_type == 'macro')
         
         self.include_time_fe: bool = self.config.get('INCLUDE_TIME_FE', False)
@@ -83,6 +86,8 @@ class RegressionDataPreparer:
 
         print("--- Feature engineering: Calculate financial ratios -----------------------------------")
         df = self._calculate_financial_ratios(df)
+
+        df = self._engineer_bank_features(df)
 
         print(f"\n--- Feature selection --------------------------------------------------------------------")
 
@@ -204,6 +209,9 @@ class RegressionDataPreparer:
         df2['provisions_for_credit_losses_to_assets'] = (
             df2['provisions_for_credit_losses'] / df2['total_assets'])
         df2['rwa_ratio'] = df2['total_rwa'] / df2['total_assets']
+
+        df2['dep_short_term']              = df2['dep_small_3m_less'] + df2['dep_small_3m_1y'] + df2['dep_large_3m_less'] + df2['dep_large_3m_1y']
+        df2['dep_long_term']               = df2['dep_small_1y_3y'] + df2['dep_small_3y_more'] + df2['dep_large_1y_3y'] + df2['dep_large_3y_more']
         df2['dep_small_3m_less_to_assets'] = df2['dep_small_3m_less'] / df2['total_assets']
         df2['dep_small_3m_1y_to_assets']   = df2['dep_small_3m_1y']   / df2['total_assets']
         df2['dep_small_1y_3y_to_assets']   = df2['dep_small_1y_3y']   / df2['total_assets']
@@ -212,6 +220,21 @@ class RegressionDataPreparer:
         df2['dep_large_3m_1y_to_assets']   = df2['dep_large_3m_1y']   / df2['total_assets']
         df2['dep_large_1y_3y_to_assets']   = df2['dep_large_1y_3y']   / df2['total_assets']
         df2['dep_large_3y_more_to_assets'] = df2['dep_large_3y_more'] / df2['total_assets']
+
+        df2['loans_short_term']               = df2['closed_end_first_liens_1_4_res_prop_3m_less'] + \
+                                                df2['closed_end_first_liens_1_4_res_prop_3m_1y'] + \
+                                                df2['all_other_loans_3m_less'] + \
+                                                df2['all_other_loans_3m_1y'] 
+        df2['loans_long_term']               =  df2['closed_end_first_liens_1_4_res_prop_1y_3y'] + \
+                                                df2['closed_end_first_liens_1_4_res_prop_3y_5y'] + \
+                                                df2['closed_end_first_liens_1_4_res_prop_5y_15y'] + \
+                                                df2['closed_end_first_liens_1_4_res_prop_15y_more'] + \
+                                                df2['all_other_loans_1y_3y'] + \
+                                                df2['all_other_loans_3y_5y'] + \
+                                                df2['all_other_loans_5y_15y'] + \
+                                                df2['all_other_loans_15y_more']
+        df2['loans_short_term_to_assets'] = df2['loans_short_term'] / df2['total_assets']
+        df2['dep_short_term_to_assets']   = df2['dep_short_term'] /   df2['total_assets']
         df2['closed_end_first_liens_1_4_res_prop_3m_less_to_assets']  = df2['closed_end_first_liens_1_4_res_prop_3m_less']  / df2['total_assets']
         df2['closed_end_first_liens_1_4_res_prop_3m_1y_to_assets']    = df2['closed_end_first_liens_1_4_res_prop_3m_1y']    / df2['total_assets']
         df2['closed_end_first_liens_1_4_res_prop_1y_3y_to_assets']    = df2['closed_end_first_liens_1_4_res_prop_1y_3y']    / df2['total_assets']
@@ -224,7 +247,8 @@ class RegressionDataPreparer:
         df2['all_other_loans_3y_5y_to_assets']                        = df2['all_other_loans_3y_5y']                        / df2['total_assets']
         df2['all_other_loans_5y_15y_to_assets']                       = df2['all_other_loans_5y_15y']                       / df2['total_assets']
         df2['all_other_loans_15y_more_to_assets']                     = df2['all_other_loans_15y_more']                     / df2['total_assets']
-    
+        df2['dep_demand_to_assets'] = df2['dep_demand'] / df2['total_assets']
+
 
         # Log total assets
         df2['log_total_assets'] = np.log(df2['total_assets'].replace(0, np.nan).fillna(1e-9))
@@ -232,11 +256,41 @@ class RegressionDataPreparer:
         print("Financial ratios calculated.")
         return df2
 
+    def _engineer_bank_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Engineers new features for bank-level variables, like differences and QoQ changes.
+        """
+        print("Engineering bank-specific features (diffs and QoQ)...")
+        df_out = df.sort_index(level=['id', 'date']).copy()
+
+        bank_vars_to_engineer = [var for var in self.bank_variables if var in df_out.columns]
+        
+        new_features = []
+        for col in bank_vars_to_engineer:
+            grouped = df_out.groupby(level='id')[col]
+            
+            diff_col = f"{col}_diff"
+            df_out[diff_col] = grouped.diff()
+            new_features.append(diff_col)
+            
+            qoq_col = f"{col}_qoq"
+            df_out[qoq_col] = grouped.pct_change()
+            # Replace inf/-inf values resulting from pct_change (division by zero) with NaN
+            # These will then be handled by subsequent missing value processing steps.
+            df_out.replace([np.inf, -np.inf], np.nan, inplace=True)
+            new_features.append(qoq_col)
+
+        self.feature_variables.extend([f for f in new_features if f not in self.feature_variables])
+        print(f"Engineered {len(new_features)} new bank features.")
+        return df_out
+
     def _select_features_and_target(self, df: pd.DataFrame) -> pd.DataFrame:
         """Selects only the target variable and base feature variables."""
         print("Selecting features and target variable...")
-        cols_to_select = self.feature_variables[:] + self.target_variables[:]
-        cols_to_select = self.feature_variables[:] + self.target_variables[:]
+        cols_to_select: List[str] = self.feature_variables[:] + self.target_variables[:]
+        # Ensure 'total_assets' is kept if bank size restriction is active
+        if self.config.get('RESTRICT_TO_BANK_SIZE') is not None and 'total_assets' not in cols_to_select:
+            cols_to_select.append('total_assets')
         # Ensure all selected columns exist in the DataFrame
         existing_cols = [col for col in cols_to_select if col in df.columns]
         missing_cols = [col for col in cols_to_select if col not in df.columns]

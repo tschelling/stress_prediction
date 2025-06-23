@@ -39,8 +39,6 @@ print("Data merged and index set.")
 # Remove rows with nan ids
 data_merged = data_merged[~data_merged.index.get_level_values('id').isna()]
 
-# Calculate financial ratios
-data_merged = calculate_financial_ratios(data_merged)
 
 # Save the processed data
 print(f"\nSaving processed data to {OUTPUT_FILENAME}...")

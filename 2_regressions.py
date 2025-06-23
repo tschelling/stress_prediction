@@ -22,6 +22,7 @@ from sklearn.ensemble import RandomForestRegressor # Added for RandomForest
 from keras.callbacks import EarlyStopping, TensorBoard # Import TensorBoard
 from scikeras.wrappers import KerasRegressor
 
+import shutil # Added for directory cleaning
 import regression_data_preparer
 import importlib
 importlib.reload(regression_data_preparer)  # Ensure the latest version of PanelDataPreparer is used
@@ -45,10 +46,11 @@ tf.get_logger().setLevel('ERROR') # Suppress TensorFlow INFO and WARNING message
 TARGET_VARIABLES = {'interest_income_to_assets':'bank', 'interest_expense_to_assets':'bank',
                    'non_interest_income_to_assets':'bank', 'non_interest_expense_to_assets':'bank',
                    'net_charge_offs_to_loans_and_leases':'bank'}
-FEATURE_VARIABLES = {'deposit_ratio':'bank', 'loan_to_asset_ratio':'bank', 'log_total_assets':'bank', 
-                     'cpi_qoq':'macro',      'gdp_qoq':'macro',     'unemployment':'macro', 'household_delinq':'macro', 
-                     'tbill_3m':'macro',     'tbill_10y':'macro', 'sp500_qoq':'macro',
-                     'corp_bond_spread':'macro', 'vix_qoq':'macro', 'is_structural_break':'bank',
+FEATURE_VARIABLES = {'deposit_ratio':'bank', 'loan_to_asset_ratio':'bank', #'dep_demand_to_assets':'bank', 
+                     'loans_short_term_to_assets':'bank', 'log_total_assets':'bank', 
+                     'cpi_qoq':'macro',      'gdp_qoq':'macro',     'unemployment_diff':'macro', 'household_delinq_diff':'macro', 
+                     'tbill_3m_diff':'macro',     'tbill_10y_diff':'macro', 'sp500_qoq':'macro',
+                     'corp_bond_spread_diff':'macro', 'vix_qoq':'macro', 'is_structural_break':'bank',
                      # 'dep_small_3m_less_to_assets':'bank',
                      # 'dep_small_3m_1y_to_assets':'bank',
                      # 'dep_small_1y_3y_to_assets':'bank',
@@ -83,10 +85,10 @@ c = {
     'OUTLIER_THRESHOLD_TARGET': 3.0,                    
     'MIN_OBS_PER_BANK': 12,             
     'CORRECT_STRUCTURAL_BREAKS_TOTAL_ASSETS': True,                
-    'DATA_BEGIN': '2017-01-01',                              
+    'DATA_BEGIN': None, #'2017-01-01',                              
     'DATA_END': None,                                  
     'RESTRICT_TO_NUMBER_OF_BANKS': 100,                 
-    'RESTRICT_TO_BANK_SIZE': None,                      
+    'RESTRICT_TO_BANK_SIZE': 1e6, # 1 bln USD                     
     'RESTRICT_TO_MINIMAL_DEPOSIT_RATIO': None,          
     'RESTRICT_TO_MAX_CHANGE_IN_DEPOSIT_RATIO': None,     
     'INCLUDE_AUTOREGRESSIVE_LAGS': True,                
@@ -100,9 +102,8 @@ c = {
 # --- Model Selection ---
 # Options: None (all defined models), or a list of model names, e.g., ["XGBoost", "Ridge", "NeuralNetwork"]
 # Available models: "XGBoost", "RandomForest", "DecisionTree", "Lasso", "Ridge", "ElasticNet", 
-#                   "LinearRegression", "NeuralNetwork", "DummyRegressor", "RFE_Pipeline_RF", "LightGBM", "CatBoost"
-MODELS_TO_RUN = ["LinearRegression", "XGBoost", "RandomForest",
-                 "RFE_Pipeline_RF", "RFE_Pipeline_LR"] #"RFE_DTR_Pipeline_RF", "RFE_DTR_Pipeline_LR"] 
+#                   "LinearRegression", "NeuralNetwork", "DummyRegressor", "RFE_LR_Pipeline_RF", "LightGBM", "CatBoost"
+MODELS_TO_RUN = ["XGBoost"]#, "RandomForest", "RFE_Pipeline_XGBoost", "RFE_LR_Pipeline_RF", "RFE_LR_Pipeline_LR"] 
 
 
 
@@ -244,21 +245,17 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
             # Let's use 'val_loss' as CV is typical, and 'loss' if CV is skipped.
             callbacks=[EarlyStopping(monitor='val_loss', patience=15, verbose=0, restore_best_weights=True, mode='min')] # Increased patience
         ),
-        "RFE_Pipeline_RF": Pipeline([
+        "RFE_LR_Pipeline_RF": Pipeline([
             ('rfe', RFE(estimator=LinearRegression(), n_features_to_select=None)), 
             ('RandomForest', RandomForestRegressor(random_state=42, n_jobs=-1))
         ]),
-        "RFE_Pipeline_LR": Pipeline([ # Added RFE with Linear Regression
+        "RFE_LR_Pipeline_LR": Pipeline([ # Added RFE with Linear Regression
             ('rfe', RFE(estimator=LinearRegression(), n_features_to_select=None)), 
             ('LinearRegression', LinearRegression()) # Final estimator
         ]),
-        "RFE_DTR_Pipeline_RF": Pipeline([ # New: RFE with DecisionTreeRegressor estimator, final RF
-            ('rfe', RFE(estimator=DecisionTreeRegressor(max_depth=5, random_state=42), n_features_to_select=None)),
-            ('RandomForest', RandomForestRegressor(random_state=42, n_jobs=-1))
-        ]),
-        "RFE_DTR_Pipeline_LR": Pipeline([ # New: RFE with DecisionTreeRegressor estimator, final LR
-            ('rfe', RFE(estimator=DecisionTreeRegressor(max_depth=5, random_state=42), n_features_to_select=None)),
-            ('LinearRegression', LinearRegression())
+        "RFE_Pipeline_XGBoost": Pipeline([
+            ('rfe', RFE(estimator=LinearRegression(), n_features_to_select=None)),
+            ('XGBoost', XGBRegressor(random_state=42, objective='reg:squarederror', n_jobs=-1, tree_method='hist'))
         ]),
         "LightGBM": LGBMRegressor(random_state=42, n_jobs=-1, verbose=-1),
         "CatBoost": CatBoostRegressor(random_state=42, verbose=0, allow_writing_files=False),
@@ -310,7 +307,7 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
                 'model__use_batch_norm': [True, False], # Tune BatchNormalization
                 'validation_split': uniform(0.05, 0.2) # Tunable validation_split (0.05 to 0.25)
             },
-            "RFE_Pipeline_RF": {
+            "RFE_LR_Pipeline_RF": {
                 'rfe__n_features_to_select': randint(max(1, approx_max_features // 4), max(2, approx_max_features + 1)), # Tune number of features from 1/4 to full
                 # RandomForest params need to be prefixed with 'RandomForest__' (the name in the pipeline)
                 'RandomForest__n_estimators': randint(10, 151),
@@ -318,14 +315,7 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
                 'RandomForest__min_samples_split': randint(2, 16),
                 'RandomForest__min_samples_leaf': randint(1, 11)
             },
-            "RFE_DTR_Pipeline_RF": { # Param grid for new RFE_DTR_Pipeline_RF
-                'rfe__n_features_to_select': randint(max(1, approx_max_features // 4), max(2, approx_max_features + 1)),
-                'RandomForest__n_estimators': randint(10, 151),
-                'RandomForest__max_depth': [None] + list(range(5, 21)),
-                'RandomForest__min_samples_split': randint(2, 16),
-                'RandomForest__min_samples_leaf': randint(1, 11)
-            },
-            "RFE_Pipeline_LR": { # Param grid for RFE_Pipeline_LR
+            "RFE_LR_Pipeline_LR": { # Param grid for RFE_LR_Pipeline_LR
                 'rfe__n_features_to_select': randint(max(1, approx_max_features // 4), max(2, approx_max_features + 1)),
                 # LinearRegression itself has few hyperparameters to tune that drastically change stability beyond feature selection
                 # 'LinearRegression__fit_intercept': [True, False] # Example if you wanted to tune LR params
@@ -334,6 +324,15 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
                 'rfe__n_features_to_select': randint(max(1, approx_max_features // 4), max(2, approx_max_features + 1)),
                 # 'LinearRegression__fit_intercept': [True, False]
             },
+            "RFE_Pipeline_XGBoost": {
+                'rfe__n_features_to_select': randint(max(1, approx_max_features // 4), max(2, approx_max_features + 1)),
+                'XGBoost__n_estimators': randint(10, 151),
+                'XGBoost__learning_rate': uniform(0.01, 0.3 - 0.01),
+                'XGBoost__max_depth': randint(3, 12),
+                'XGBoost__subsample': uniform(0.2, 1.0 - 0.2),
+                'XGBoost__colsample_bytree': uniform(0.2, 1.0 - 0.2),
+            },
+
             "LightGBM": {
                 'n_estimators': randint(50, 300),
                 'learning_rate': uniform(0.01, 0.2), # 0.01 to 0.21
@@ -382,28 +381,24 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
                 'model__use_batch_norm': [True, False],
                 'validation_split': [0.1, 0.2]
             },
-            "RFE_Pipeline_RF": {
+            "RFE_LR_Pipeline_RF": {
                 'rfe__n_features_to_select': [max(1, approx_max_features // 3), max(1, approx_max_features * 2 // 3), approx_max_features],
                 'RandomForest__n_estimators': [50, 100],
                 'RandomForest__max_depth': [None, 10],
                 'RandomForest__min_samples_split': [2, 10],
                 'RandomForest__min_samples_leaf': [1, 5]
             },
-            "RFE_DTR_Pipeline_RF": { # Param grid for new RFE_DTR_Pipeline_RF (GridSearch)
-                'rfe__n_features_to_select': [max(1, approx_max_features // 3), max(1, approx_max_features * 2 // 3), approx_max_features],
-                'RandomForest__n_estimators': [50, 100],
-                'RandomForest__max_depth': [None, 10],
-                'RandomForest__min_samples_split': [2, 10],
-                'RandomForest__min_samples_leaf': [1, 5]
-            },
-            "RFE_Pipeline_LR": { # Param grid for RFE_Pipeline_LR
+            "RFE_LR_Pipeline_LR": { # Param grid for RFE_LR_Pipeline_LR
                 'rfe__n_features_to_select': [max(1, approx_max_features // 3), max(1, approx_max_features * 2 // 3), approx_max_features],
                 # 'LinearRegression__fit_intercept': [True, False]
             },
-            "RFE_DTR_Pipeline_LR": { # Param grid for new RFE_DTR_Pipeline_LR (GridSearch)
+            "RFE_Pipeline_XGBoost": {
                 'rfe__n_features_to_select': [max(1, approx_max_features // 3), max(1, approx_max_features * 2 // 3), approx_max_features],
-                # 'LinearRegression__fit_intercept': [True, False]
+                'XGBoost__n_estimators': [20, 50, 100],
+                'XGBoost__learning_rate': [0.01, 0.05, 0.1],
+                'XGBoost__max_depth': [3, 5, 7],
             },
+
             "LightGBM": {
                 'n_estimators': [50, 150],
                 'learning_rate': [0.01, 0.1],
@@ -763,6 +758,10 @@ def plot_features_timeseries_flat(
 results_store = {}
 
 if SAVE_ARTIFACTS:
+    # Clean out the artifacts directory before starting a new run
+    if os.path.exists(ARTIFACTS_BASE_DIR):
+        print(f"Cleaning existing artifacts directory: {os.path.abspath(ARTIFACTS_BASE_DIR)}")
+        shutil.rmtree(ARTIFACTS_BASE_DIR)
     os.makedirs(ARTIFACTS_BASE_DIR, exist_ok=True)
     print(f"Artifacts will be saved in: {os.path.abspath(ARTIFACTS_BASE_DIR)}")
 
@@ -786,17 +785,15 @@ for current_target_variable in TARGET_VARIABLES.keys():
             os.makedirs(current_target_artifact_dir_for_horizon, exist_ok=True)
 
         # Prepare data for the current horizon and target using RegressionDataPreparer
-        prepared_data = data_preparer.get_horizon_specific_data(horizon=horizon_val, target_variable=current_target_variable)
+        X_train_scaled_df, X_test_scaled_df, y_train, y_test, X_train_orig, X_test_orig = \
+            data_preparer.get_horizon_specific_data(horizon=horizon_val, target_variable=current_target_variable)
 
-        if prepared_data is None:
-            print(f"  Skipping horizon {horizon_val} for target {current_target_variable} due to data preparation failure.")
+        if X_train_scaled_df is None: # Check if data preparation failed and returned None for X_train
+            print(f"  Skipping horizon {horizon_val} for target {current_target_variable} due to data preparation failure (X_train is None).")
             for name_model in models_config.keys():
                 results_store[current_target_variable][horizon_val][name_model] = {'model_object': None}
             results_store[current_target_variable][horizon_val]['VotingEnsemble'] = {'model_object': None}
-            continue 
-                
-        X_train_scaled_df, X_test_scaled_df, y_train, y_test, X_train_orig, X_test_orig = prepared_data
-
+            continue
         if SAVE_ARTIFACTS and current_target_artifact_dir_for_horizon:
             data_artifact_dir = os.path.join(current_target_artifact_dir_for_horizon, "data")
             os.makedirs(data_artifact_dir, exist_ok=True)
