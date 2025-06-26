@@ -7,6 +7,7 @@ import os
 import math
 from sklearn.pipeline import Pipeline
 from IPython.display import display
+from publication_name_mapping import PUBLICATION_NAMES
 
 # --- Configuration ---
 ARTIFACTS_BASE_DIR = "models_and_results_test"  # Should match 2_regressions.py
@@ -98,7 +99,8 @@ def plot_feature_importance(model, feature_names, ax=None, top_n=10, r2_score_va
         indices = np.argsort(np.abs(importances_values))[::-1]
         top_indices = indices[:top_n]
         top_importances = importances_values[top_indices]
-        top_feature_names = np.array(processed_feature_names)[top_indices]
+        top_feature_names_raw = np.array(processed_feature_names)[top_indices]
+        top_feature_names = [PUBLICATION_NAMES.get(name, name) for name in top_feature_names_raw]
         
         ax.bar(range(len(top_importances)), top_importances, align='center')
         ax.set_xticks(range(len(top_importances)))
@@ -212,9 +214,10 @@ if __name__ == "__main__":
     for target_dir_name in os.listdir(ARTIFACTS_BASE_DIR):
         if target_dir_name.startswith("target_"):
             current_target_variable = target_dir_name.replace("target_", "")
+            pub_target_name = PUBLICATION_NAMES.get(current_target_variable, current_target_variable)
             target_path = os.path.join(ARTIFACTS_BASE_DIR, target_dir_name)
 
-            print(f"\n--- Inspecting Target Variable: {current_target_variable} ---")
+            print(f"\n--- Inspecting Target Variable: {pub_target_name} ---")
 
             for horizon_dir_name in os.listdir(target_path):
                 if horizon_dir_name.startswith("horizon_"):
@@ -295,7 +298,7 @@ if __name__ == "__main__":
                             
                             ax.set_title(f"{model_name} (Test MAPE: {test_metrics.get('MAPE', float('nan')):.2f}%)", fontsize=10)
                             ax.set_xlabel('Date', fontsize=8)
-                            ax.set_ylabel(current_target_variable, fontsize=8)
+                            ax.set_ylabel(pub_target_name, fontsize=8)
                             if not y_train.empty or not y_test.empty:
                                 ax.xaxis.set_major_formatter(plt.matplotlib.dates.DateFormatter('%Y-%m'))
                             ax.tick_params(axis='x', rotation=45, labelsize=7)
@@ -305,7 +308,7 @@ if __name__ == "__main__":
                             plot_idx_pred += 1
                         
                         for i in range(plot_idx_pred, len(axes_pred_flat)): fig_pred.delaxes(axes_pred_flat[i])
-                        fig_pred.suptitle(f"Model Predictions vs Actuals ({current_target_variable}, Horizon {horizon_val})", fontsize=16, y=1.0) # Adjusted y
+                        fig_pred.suptitle(f"Model Predictions vs Actuals ({pub_target_name}, Horizon {horizon_val})", fontsize=16, y=1.0) # Adjusted y
                         plt.tight_layout(rect=[0, 0, 1, 0.97]) # Adjust rect for suptitle
                         plt.show()
 
@@ -340,12 +343,12 @@ if __name__ == "__main__":
                             plot_idx_fi += 1
 
                         for i in range(plot_idx_fi, len(axes_fi_flat)): fig_fi.delaxes(axes_fi_flat[i])
-                        fig_fi.suptitle(f"Feature Importances ({current_target_variable}, Horizon {horizon_val})", fontsize=14, y=1.0) # Adjusted y
+                        fig_fi.suptitle(f"Feature Importances ({pub_target_name}, Horizon {horizon_val})", fontsize=14, y=1.0) # Adjusted y
                         plt.tight_layout(rect=[0, 0, 1, 0.96]) # Adjust rect for suptitle
                         plt.show()
 
                     # --- Display Selected Features for RFE Models ---
-                    print(f"    Selected Features by RFE Models (Target: {current_target_variable}, Horizon: {horizon_val}):")
+                    print(f"    Selected Features by RFE Models (Target: {pub_target_name}, Horizon: {horizon_val}):")
                     found_rfe = False
                     for item_name in os.listdir(current_artifact_dir):
                         if item_name.endswith(".joblib") and "RFE" in item_name: # Simple check for RFE in name
@@ -357,7 +360,8 @@ if __name__ == "__main__":
                                 rfe_step = model_obj_rfe.named_steps['rfe']
                                 final_estimator_name = [name for name in model_obj_rfe.named_steps if name != 'rfe'][0]
                                 if hasattr(rfe_step, 'support_') and rfe_step.support_ is not None:
-                                    selected_features = np.array(feature_names)[rfe_step.support_]
+                                    selected_features_raw = np.array(feature_names)[rfe_step.support_]
+                                    selected_features = [PUBLICATION_NAMES.get(name, name) for name in selected_features_raw]
                                     print(f"      Model: {model_name_rfe} (Estimator: {final_estimator_name})")
                                     print(f"        Selected {len(selected_features)} features: {list(selected_features)}")
                                     found_rfe = True
@@ -369,6 +373,7 @@ if __name__ == "__main__":
     # --- Display Aggregated Metrics ---
     if all_calculated_metrics:
         metrics_df = pd.DataFrame(all_calculated_metrics)
+        metrics_df['TargetVariable'] = metrics_df['TargetVariable'].map(PUBLICATION_NAMES).fillna(metrics_df['TargetVariable'])
         # Define a more comprehensive column order
         metric_cols_ordered = ['TargetVariable', 'Horizon', 'Model', 
                                'Test_RMSE', 'Test_MAE', 'Test_R2', 'Test_MAPE', 

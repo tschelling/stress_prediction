@@ -252,6 +252,9 @@ class RegressionDataPreparer:
         df2['all_other_loans_5y_15y_to_assets']                       = df2['all_other_loans_5y_15y']                       / df2['total_assets']
         df2['all_other_loans_15y_more_to_assets']                     = df2['all_other_loans_15y_more']                     / df2['total_assets']
         df2['dep_demand_to_assets'] = df2['dep_demand'] / df2['total_assets']
+        df2['dep_transaction_accounts_to_assets'] = df2['dep_transaction_accounts'] / df2['total_assets']
+
+
 
 
         # Log total assets
