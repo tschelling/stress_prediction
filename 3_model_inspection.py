@@ -1,24 +1,19 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns # Added for new bar plot
+import seaborn as sns
 import joblib
 import os
 import math
-from IPython.display import display # For displaying DataFrames
 from sklearn.pipeline import Pipeline
-# Ensure KerasRegressor and other custom objects can be loaded if they were pickled
-# from scikeras.wrappers import KerasRegressor
-# from xgboost import XGBRegressor
-# import tensorflow as tf # Required if loading Keras models directly
+from IPython.display import display
 
 # --- Configuration ---
-ARTIFACTS_BASE_DIR = "models_and_results1"  # Should match 2_regressions.py
+ARTIFACTS_BASE_DIR = "models_and_results_test"  # Should match 2_regressions.py
 TOP_N_FEATURES = 10  # For feature importance plots
 MODELS_FOR_FI_PLOT = ["XGBoost", "RandomForest", "DecisionTree", "RFE_Pipeline_RF"]
 
 # Suppress TensorFlow INFO and WARNING messages if Keras models are loaded
-# tf.get_logger().setLevel('ERROR')
 
 # --- Helper Functions (copied from 2_regressions.py) ---
 
@@ -150,7 +145,61 @@ def _calculate_metrics(y_true: pd.Series, predictions: np.ndarray) -> dict:
     if not y_true_no_zeros.empty:
         predictions_aligned_for_mape = predictions_series.loc[y_true_no_zeros.index]
         mape = np.mean(np.abs((y_true_no_zeros - predictions_aligned_for_mape) / y_true_no_zeros)) * 100
-    return {'MAE': mae, 'MSE': mse, 'RMSE': rmse, 'R2': r2, 'MAPE': mape}
+    return {'MAE': mae, 'MSE': mse, 'RMSE': rmse, 'R2': r2, 'MAPE': mape} 
+
+# New helper functions for data characteristics
+def load_results_store(artifacts_dir: str) -> dict:
+    """Loads the results_store dictionary."""
+    path = os.path.join(artifacts_dir, "results_store.joblib")
+    return joblib.load(path)
+
+def load_data_for_horizon(artifacts_dir: str, target_variable_name: str, horizon: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
+    """
+    Loads the scaled training and testing feature sets (X) and target variables (y)
+    for a specific target variable and forecast horizon.
+    """
+    target_specific_artifact_dir = os.path.join(artifacts_dir, f"target_{target_variable_name}")
+    data_dir = os.path.join(target_specific_artifact_dir, f"horizon_{horizon}", "data")
+
+    X_train_path = os.path.join(data_dir, "X_train_scaled.parquet")
+    X_test_path = os.path.join(data_dir, "X_test_scaled.parquet")
+    y_train_path = os.path.join(data_dir, "y_train.parquet")
+    y_test_path = os.path.join(data_dir, "y_test.parquet")
+
+    X_train_scaled_df = pd.read_parquet(X_train_path)
+    X_test_scaled_df = pd.read_parquet(X_test_path)
+    y_train_df = pd.read_parquet(y_train_path)
+    y_test_df = pd.read_parquet(y_test_path)
+    
+    y_train = y_train_df[y_train_df.columns[0]]
+    y_test = y_test_df[y_test_df.columns[0]]
+
+    return X_train_scaled_df, X_test_scaled_df, y_train, y_test
+
+def get_data_characteristics_per_model(artifacts_base_dir: str) -> pd.DataFrame:
+    """
+    Generates a DataFrame listing the number of unique banks, dates, and total
+    observations for the training and testing sets, broken down by target variable,
+    forecast horizon, and model.
+    """
+    results_store = load_results_store(artifacts_base_dir)
+    all_data_characteristics = []
+
+    for target_variable, horizons_data in results_store.items():
+        for horizon_val, models_data in horizons_data.items():
+            X_train_scaled_df, X_test_scaled_df, y_train, y_test = load_data_for_horizon(artifacts_base_dir, target_variable, horizon_val)
+            train_unique_banks = X_train_scaled_df.index.get_level_values('id').nunique()
+            train_unique_dates = X_train_scaled_df.index.get_level_values('date').nunique()
+            train_observations = len(X_train_scaled_df)
+            
+            test_unique_banks = X_test_scaled_df.index.get_level_values('id').nunique()
+            
+            total_unique_banks = pd.Series(X_train_scaled_df.index.get_level_values('id').tolist() + X_test_scaled_df.index.get_level_values('id').tolist()).nunique()
+            test_unique_dates = X_test_scaled_df.index.get_level_values('date').nunique()
+            test_observations = len(X_test_scaled_df)
+            for model_name in models_data.keys():
+                all_data_characteristics.append({'Target Variable': target_variable, 'Horizon': horizon_val, 'Model Name': model_name, 'Train_Unique_Banks': train_unique_banks, 'Train_Unique_Dates': train_unique_dates, 'Train_Observations': train_observations, 'Test_Unique_Banks': test_unique_banks, 'Test_Unique_Dates': test_unique_dates, 'Test_Observations': test_observations, 'Total_Unique_Banks': total_unique_banks})
+    return pd.DataFrame(all_data_characteristics)
 
 # --- Main Inspection Logic ---
 if __name__ == "__main__":
@@ -431,6 +480,10 @@ if __name__ == "__main__":
             else:
                 print("\nCannot plot Test_RMSE bars: No valid data after filtering NaNs for Test_RMSE.")
     else:
-        print("\nNo metrics were calculated to display.")
+        print("\nNo metrics were calculated to display.") 
+
+    print("\n\n--- Data Characteristics per Model ---")
+    data_characteristics_df = get_data_characteristics_per_model(ARTIFACTS_BASE_DIR)
+    display(data_characteristics_df)
 
     print("\n--- Model Inspection Complete ---")

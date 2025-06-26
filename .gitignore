@@ -7,7 +7,5 @@
 *.pdf
 *.pyc
 /.vscode
-/models_and_results
-/models_and_results1
-/model_run_artifacts_run_1
+/models_and_results*
 /venv_cas

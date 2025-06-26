@@ -579,7 +579,7 @@ class RegressionDataPreparer:
         if number_of_banks is not None:
             if not isinstance(number_of_banks, int) or number_of_banks <= 0:
                 print(f"Warning: 'RESTRICT_TO_NUMBER_OF_BANKS' ({number_of_banks}) is invalid. Skipping this filter.")
-            else:
+            elif initial_banks > number_of_banks: # Apply restriction only if initial count exceeds the limit
                 current_bank_ids = df_processed.index.get_level_values('id').unique()
                 if len(current_bank_ids) > number_of_banks:
                     # Use a fixed random state for reproducibility
@@ -934,7 +934,7 @@ class RegressionDataPreparer:
         categorical_model_features = [f for f in X_train_pre_lag.columns if not pd.api.types.is_numeric_dtype(X_train_pre_lag[f]) and f not in ar_term_names]
         numeric_features_for_lags_present = [f for f in numeric_features if f in X_train_pre_lag.columns]
 
-        X_train_final_cleaned, X_test_final_cleaned, y_train_final, y_test_final = self._combine_features_and_align_target( # Renamed to X_train_final_cleaned
+        X_train_final_cleaned, X_test_final_cleaned, y_train_final, y_test_final = self._combine_features_and_align_target(
             X_train_pre_lag, X_test_pre_lag, y_train, ar_term_names, y_test, # Pass the newly shifted y_train/y_test
             horizon, numeric_features_for_lags_present, categorical_model_features, self.num_lags_to_include)
 
@@ -952,6 +952,9 @@ class RegressionDataPreparer:
         print(f"Data preparation for H{horizon} complete. Train shape: {X_train_scaled.shape}, Test shape: {X_test_scaled.shape if X_test_scaled is not None else 'N/A'}")
 
         return X_train_scaled, X_test_scaled, y_train_final, y_test_final, X_train_final_cleaned, X_test_final_cleaned
+
+
+
     def _correct_structural_breaks_in_total_assets(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Corrects for structural breaks in the 'log_total_assets' time series within a DataFrame.

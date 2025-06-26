@@ -10,7 +10,7 @@ importlib.reload(regression_data_preparer)  # Ensure the latest version of Panel
 from regression_data_preparer import RegressionDataPreparer
 
 TARGET_VARIABLES = {'interest_income_to_assets':'bank', 'interest_expense_to_assets':'bank',
-                   'non_interest_income_to_assets':'bank', 'non_interest_expense_to_assets':'bank', 'trading_assets_to_assets':'bank',
+                   'non_interest_income_to_assets':'bank', 'non_interest_expense_to_assets':'bank',
                    'net_charge_offs_to_loans_and_leases':'bank'}
 FEATURE_VARIABLES = {'deposit_ratio':'bank', 'loan_to_asset_ratio':'bank', 'dep_demand_to_assets':'bank',
                      'loans_short_term_to_assets':'bank', 'log_total_assets':'bank', 
@@ -116,6 +116,8 @@ plt.show()
 print(f"\nData Information Dictionary:\n{data_information}")
 
 #endregion
+
+
 
 
 #region Plot variables over time

@@ -46,8 +46,8 @@ tf.get_logger().setLevel('ERROR') # Suppress TensorFlow INFO and WARNING message
 TARGET_VARIABLES = {'interest_income_to_assets':'bank', 'interest_expense_to_assets':'bank',
                    'non_interest_income_to_assets':'bank', 'non_interest_expense_to_assets':'bank',
                    'net_charge_offs_to_loans_and_leases':'bank'}
-FEATURE_VARIABLES = {'deposit_ratio':'bank', 'loan_to_asset_ratio':'bank', #'dep_demand_to_assets':'bank', 
-                     'loans_short_term_to_assets':'bank', 'log_total_assets':'bank', 
+FEATURE_VARIABLES = {'deposit_ratio':'bank', 'loan_to_asset_ratio':'bank', #'dep_demand_to_assets':'bank', 'loans_short_term_to_assets':'bank', 
+                     'log_total_assets':'bank', 
                      'cpi_qoq':'macro',      'gdp_qoq':'macro',     'unemployment_diff':'macro', 'household_delinq_diff':'macro', 
                      'tbill_3m_diff':'macro',     'tbill_10y_diff':'macro', 'sp500_qoq':'macro',
                      'corp_bond_spread_diff':'macro', 'vix_qoq':'macro', 'is_structural_break':'bank',
@@ -87,14 +87,14 @@ c = {
     'CORRECT_STRUCTURAL_BREAKS_TOTAL_ASSETS': True,                
     'DATA_BEGIN': None, #'2017-01-01',                              
     'DATA_END': None,                                  
-    'RESTRICT_TO_NUMBER_OF_BANKS': 100,                 
-    'RESTRICT_TO_BANK_SIZE': 1e6, # 1 bln USD                     
+    'RESTRICT_TO_NUMBER_OF_BANKS': 200,                 
+    'RESTRICT_TO_BANK_SIZE': 10e6, # 500 mln USD                     
     'RESTRICT_TO_MINIMAL_DEPOSIT_RATIO': None,          
     'RESTRICT_TO_MAX_CHANGE_IN_DEPOSIT_RATIO': None,     
     'INCLUDE_AUTOREGRESSIVE_LAGS': True,                
-    'NUMBER_OF_LAGS_TO_INCLUDE': 8,                     
+    'NUMBER_OF_LAGS_TO_INCLUDE': 4,                     
     'TRAIN_TEST_SPLIT_DIMENSION': 'date',               
-    'TEST_SPLIT': "2022-04-01"                                  # Takes a number or a date in the format 'YYYY-MM-DD'
+    'TEST_SPLIT': 0.2                                  # Takes a number or a date in the format 'YYYY-MM-DD'
 }
 
 
@@ -103,7 +103,7 @@ c = {
 # Options: None (all defined models), or a list of model names, e.g., ["XGBoost", "Ridge", "NeuralNetwork"]
 # Available models: "XGBoost", "RandomForest", "DecisionTree", "Lasso", "Ridge", "ElasticNet", 
 #                   "LinearRegression", "NeuralNetwork", "DummyRegressor", "RFE_LR_Pipeline_RF", "LightGBM", "CatBoost"
-MODELS_TO_RUN = ["XGBoost"]#, "RandomForest", "RFE_Pipeline_XGBoost", "RFE_LR_Pipeline_RF", "RFE_LR_Pipeline_LR"] 
+MODELS_TO_RUN = ["RFE_LR_Pipeline_LR"]#, "RFE_LR_Pipeline_Lasso", "RFE_LR_Pipeline_Ridge", "RFE_LR_Pipeline_ElasticNet", "RFE_LR_Pipeline_DecisionTree", "RFE_LR_Pipeline_RF", "RFE_Pipeline_XGBoost"]#, "RandomForest", "RFE_Pipeline_XGBoost", "RFE_LR_Pipeline_RF", "RFE_LR_Pipeline_LR"] 
 
 
 
@@ -123,7 +123,7 @@ if tf.config.list_physical_devices('GPU'):
 
 # --- Artifact Storage & Display ---
 SAVE_ARTIFACTS = True
-ARTIFACTS_BASE_DIR = "models_and_results1"
+ARTIFACTS_BASE_DIR = "models_and_results_test"
 PLOT_RESULT_CHARTS = False
 PRINT_FINAL_SUMMARY = True
 
@@ -253,6 +253,22 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
             ('rfe', RFE(estimator=LinearRegression(), n_features_to_select=None)), 
             ('LinearRegression', LinearRegression()) # Final estimator
         ]),
+        "RFE_LR_Pipeline_Lasso": Pipeline([ # New: RFE with Lasso
+            ('rfe', RFE(estimator=LinearRegression(), n_features_to_select=None)), 
+            ('Lasso', Lasso(random_state=42, max_iter=15000))
+        ]),
+        "RFE_LR_Pipeline_Ridge": Pipeline([ # New: RFE with Ridge
+            ('rfe', RFE(estimator=LinearRegression(), n_features_to_select=None)), 
+            ('Ridge', Ridge(random_state=42, max_iter=15000))
+        ]),
+        "RFE_LR_Pipeline_ElasticNet": Pipeline([ # New: RFE with ElasticNet
+            ('rfe', RFE(estimator=LinearRegression(), n_features_to_select=None)), 
+            ('ElasticNet', ElasticNet(random_state=42, max_iter=15000))
+        ]),
+        "RFE_LR_Pipeline_DecisionTree": Pipeline([ # New: RFE with DecisionTree
+            ('rfe', RFE(estimator=LinearRegression(), n_features_to_select=None)), 
+            ('DecisionTree', DecisionTreeRegressor(random_state=42))
+        ]),
         "RFE_Pipeline_XGBoost": Pipeline([
             ('rfe', RFE(estimator=LinearRegression(), n_features_to_select=None)),
             ('XGBoost', XGBRegressor(random_state=42, objective='reg:squarederror', n_jobs=-1, tree_method='hist'))
@@ -320,9 +336,24 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
                 # LinearRegression itself has few hyperparameters to tune that drastically change stability beyond feature selection
                 # 'LinearRegression__fit_intercept': [True, False] # Example if you wanted to tune LR params
             },
-            "RFE_DTR_Pipeline_LR": { # Param grid for new RFE_DTR_Pipeline_LR
+            "RFE_LR_Pipeline_Lasso": { # Param grid for RFE_LR_Pipeline_Lasso
                 'rfe__n_features_to_select': randint(max(1, approx_max_features // 4), max(2, approx_max_features + 1)),
-                # 'LinearRegression__fit_intercept': [True, False]
+                'Lasso__alpha': uniform(0.0001, 10 - 0.0001)
+            },
+            "RFE_LR_Pipeline_Ridge": { # Param grid for RFE_LR_Pipeline_Ridge
+                'rfe__n_features_to_select': randint(max(1, approx_max_features // 4), max(2, approx_max_features + 1)),
+                'Ridge__alpha': uniform(0.001, 100 - 0.001)
+            },
+            "RFE_LR_Pipeline_ElasticNet": { # Param grid for RFE_LR_Pipeline_ElasticNet
+                'rfe__n_features_to_select': randint(max(1, approx_max_features // 4), max(2, approx_max_features + 1)),
+                'ElasticNet__alpha': uniform(0.001, 10 - 0.001),
+                'ElasticNet__l1_ratio': uniform(0.1, 0.9 - 0.1)
+            },
+            "RFE_LR_Pipeline_DecisionTree": { # Param grid for RFE_LR_Pipeline_DecisionTree
+                'rfe__n_features_to_select': randint(max(1, approx_max_features // 4), max(2, approx_max_features + 1)),
+                'DecisionTree__max_depth': [None] + list(range(3, 21)),
+                'DecisionTree__min_samples_split': randint(2, 21),
+                'DecisionTree__min_samples_leaf': randint(1, 11)
             },
             "RFE_Pipeline_XGBoost": {
                 'rfe__n_features_to_select': randint(max(1, approx_max_features // 4), max(2, approx_max_features + 1)),
@@ -332,7 +363,6 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
                 'XGBoost__subsample': uniform(0.2, 1.0 - 0.2),
                 'XGBoost__colsample_bytree': uniform(0.2, 1.0 - 0.2),
             },
-
             "LightGBM": {
                 'n_estimators': randint(50, 300),
                 'learning_rate': uniform(0.01, 0.2), # 0.01 to 0.21
@@ -391,6 +421,25 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
             "RFE_LR_Pipeline_LR": { # Param grid for RFE_LR_Pipeline_LR
                 'rfe__n_features_to_select': [max(1, approx_max_features // 3), max(1, approx_max_features * 2 // 3), approx_max_features],
                 # 'LinearRegression__fit_intercept': [True, False]
+            },
+                        "RFE_LR_Pipeline_Lasso": { # Param grid for RFE_LR_Pipeline_Lasso
+                'rfe__n_features_to_select': [max(1, approx_max_features // 3), max(1, approx_max_features * 2 // 3), approx_max_features],
+                'Lasso__alpha': [0.0001, 0.001, 0.01, 0.1, 1, 10, 20]
+            },
+            "RFE_LR_Pipeline_Ridge": { # Param grid for RFE_LR_Pipeline_Ridge
+                'rfe__n_features_to_select': [max(1, approx_max_features // 3), max(1, approx_max_features * 2 // 3), approx_max_features],
+                'Ridge__alpha': [0.001, 0.01, 0.1, 1, 10, 50, 100]
+            },
+            "RFE_LR_Pipeline_ElasticNet": { # Param grid for RFE_LR_Pipeline_ElasticNet
+                'rfe__n_features_to_select': [max(1, approx_max_features // 3), max(1, approx_max_features * 2 // 3), approx_max_features],
+                'ElasticNet__alpha': [0.001, 0.01, 0.1, 1, 10],
+                'ElasticNet__l1_ratio': [0.1, 0.3, 0.5, 0.7, 0.9]
+            },
+            "RFE_LR_Pipeline_DecisionTree": { # Param grid for RFE_LR_Pipeline_DecisionTree
+                'rfe__n_features_to_select': [max(1, approx_max_features // 3), max(1, approx_max_features * 2 // 3), approx_max_features],
+                'DecisionTree__max_depth': [None, 5, 10, 15, 20],
+                'DecisionTree__min_samples_split': [2, 5, 10, 20],
+                'DecisionTree__min_samples_leaf': [1, 5, 10]
             },
             "RFE_Pipeline_XGBoost": {
                 'rfe__n_features_to_select': [max(1, approx_max_features // 3), max(1, approx_max_features * 2 // 3), approx_max_features],
