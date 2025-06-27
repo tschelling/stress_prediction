@@ -579,6 +579,23 @@ class RegressionDataPreparer:
                 df_processed = df_processed[df_processed.index.get_level_values('id').isin(ids_meeting_deposit_criteria)]
                 print(f"Filtered to banks with minimum deposit ratio >= {deposit_ratio_threshold}. Banks: {df_processed.index.get_level_values('id').nunique()}, Rows: {len(df_processed)}")
         
+
+        restrict_to_largest_banks = self.config.get('RESTRICT_TO_LARGEST_BANKS')
+        
+        if restrict_to_largest_banks is not None:
+            if not isinstance(restrict_to_largest_banks, int) or restrict_to_largest_banks <= 0:
+                print(f"Warning: 'RESTRICT_TO_LARGEST_BANKS' ({restrict_to_largest_banks}) is invalid. Skipping this filter.")
+            elif df_processed.index.get_level_values('id').nunique() > restrict_to_largest_banks:
+                if 'log_total_assets' not in df_processed.columns:
+                    print("Warning: 'log_total_assets' column not found. Cannot restrict to largest banks.")
+                else:
+                    asset_col = 'log_total_assets' if 'log_total_assets' in df_processed.columns else 'total_assets'
+                    avg_assets_per_bank = df_processed.groupby(level='id')[asset_col].mean()
+                    largest_bank_ids = avg_assets_per_bank.nlargest(restrict_to_largest_banks).index
+                    df_processed = df_processed[df_processed.index.get_level_values('id').isin(largest_bank_ids)]
+                    print(f"Restricted to largest {df_processed.index.get_level_values('id').nunique()} banks by average {asset_col}.")
+
+
         if number_of_banks is not None:
             if not isinstance(number_of_banks, int) or number_of_banks <= 0:
                 print(f"Warning: 'RESTRICT_TO_NUMBER_OF_BANKS' ({number_of_banks}) is invalid. Skipping this filter.")
@@ -590,8 +607,15 @@ class RegressionDataPreparer:
                     df_processed = df_processed[df_processed.index.get_level_values('id').isin(sampled_ids)]
                     print(f"Randomly selected {df_processed.index.get_level_values('id').nunique()} banks.")
                 else:
-                    print(f"Requested {number_of_banks} banks, but only {len(current_bank_ids)} available. Using all available.")
+                    print(f"Requested {number_of_banks} banks (random sample), but only {len(current_bank_ids)} available. Using all available.")
         
+        elif restrict_to_largest_banks is not None: # If RESTRICT_TO_LARGEST_BANKS was used, then number_of_banks is implicitly set
+
+
+            print(f"RESTRICT_TO_NUMBER_OF_BANKS is implicitly set by RESTRICT_TO_LARGEST_BANKS to {df_processed.index.get_level_values('id').nunique()} banks.")
+        
+        
+
         print(f"Sample restriction complete. Initial banks: {initial_banks}, rows: {initial_rows}. Final banks: {df_processed.index.get_level_values('id').nunique()}, rows: {len(df_processed)}.")
         if df_processed.empty and initial_rows > 0:
             print("Warning: DataFrame became empty after sample restriction.")

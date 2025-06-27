@@ -46,10 +46,9 @@ tf.get_logger().setLevel('ERROR') # Suppress TensorFlow INFO and WARNING message
 TARGET_VARIABLES = {'interest_income_to_assets':'bank', 'interest_expense_to_assets':'bank',
                    'non_interest_income_to_assets':'bank', 'non_interest_expense_to_assets':'bank',
                    'net_charge_offs_to_loans_and_leases':'bank'}
-FEATURE_VARIABLES = {'deposit_ratio':'bank', 'loan_to_asset_ratio':'bank', #'dep_demand_to_assets':'bank', 'loans_short_term_to_assets':'bank', 
-                     'log_total_assets':'bank', 
-                     'cpi_qoq':'macro',      'gdp_qoq':'macro',     'unemployment_diff':'macro', 'household_delinq_diff':'macro', 
-                     'tbill_3m_diff':'macro',     'tbill_10y_diff':'macro', 'sp500_qoq':'macro',
+FEATURE_VARIABLES = {'deposit_ratio':'bank', 'loan_to_asset_ratio':'bank', 'dep_demand_to_assets':'bank', #'loans_short_term_to_assets':'bank', 
+                     'log_total_assets':'bank', 'cpi_qoq':'macro', 'gdp_qoq':'macro', 'unemployment_diff':'macro', 'household_delinq_diff':'macro', 
+                     'tbill_3m_diff':'macro', 'tbill_10y_diff':'macro', 'sp500_qoq':'macro',
                      'corp_bond_spread_diff':'macro', 'vix_qoq':'macro', 'is_structural_break':'bank',
                      # 'dep_small_3m_less_to_assets':'bank',
                      # 'dep_small_3m_1y_to_assets':'bank',
@@ -87,8 +86,8 @@ c = {
     'CORRECT_STRUCTURAL_BREAKS_TOTAL_ASSETS': True,                
     'DATA_BEGIN': None, #'2017-01-01',                              
     'DATA_END': None,                                  
-    'RESTRICT_TO_NUMBER_OF_BANKS': 200,                 
-    'RESTRICT_TO_BANK_SIZE': 10e6, # 500 mln USD                     
+    'RESTRICT_TO_NUMBER_OF_BANKS': None,                 
+    'RESTRICT_TO_LARGEST_BANKS': 200, # Restrict to the largest N banks by average total assets
     'RESTRICT_TO_MINIMAL_DEPOSIT_RATIO': None,          
     'RESTRICT_TO_MAX_CHANGE_IN_DEPOSIT_RATIO': None,     
     'INCLUDE_AUTOREGRESSIVE_LAGS': True,                
@@ -103,7 +102,8 @@ c = {
 # Options: None (all defined models), or a list of model names, e.g., ["XGBoost", "Ridge", "NeuralNetwork"]
 # Available models: "XGBoost", "RandomForest", "DecisionTree", "Lasso", "Ridge", "ElasticNet", 
 #                   "LinearRegression", "NeuralNetwork", "DummyRegressor", "RFE_LR_Pipeline_RF", "LightGBM", "CatBoost"
-MODELS_TO_RUN = ["RFE_LR_Pipeline_LR"]#, "RFE_LR_Pipeline_Lasso", "RFE_LR_Pipeline_Ridge", "RFE_LR_Pipeline_ElasticNet", "RFE_LR_Pipeline_DecisionTree", "RFE_LR_Pipeline_RF", "RFE_Pipeline_XGBoost"]#, "RandomForest", "RFE_Pipeline_XGBoost", "RFE_LR_Pipeline_RF", "RFE_LR_Pipeline_LR"] 
+# MODELS_TO_RUN = ["RFE_LR_Pipeline_LR", "RFE_LR_Pipeline_Lasso", "RFE_LR_Pipeline_Ridge", "RFE_LR_Pipeline_ElasticNet", "RFE_LR_Pipeline_DecisionTree", "RFE_LR_Pipeline_RF", "RFE_Pipeline_XGBoost"]#, "RandomForest", "RFE_Pipeline_XGBoost", "RFE_LR_Pipeline_RF", "RFE_LR_Pipeline_LR"] 
+MODELS_TO_RUN = ["LinearRegression", "Ridge", "DecisionTree", "RandomForest", "XGBoost"]#, "RandomForest", "RFE_Pipeline_XGBoost", "RFE_LR_Pipeline_RF", "RFE_LR_Pipeline_LR"] 
 
 
 
@@ -123,7 +123,7 @@ if tf.config.list_physical_devices('GPU'):
 
 # --- Artifact Storage & Display ---
 SAVE_ARTIFACTS = True
-ARTIFACTS_BASE_DIR = "models_and_results_test"
+ARTIFACTS_BASE_DIR = "models_and_results_rfe"
 PLOT_RESULT_CHARTS = False
 PRINT_FINAL_SUMMARY = True
 

@@ -55,14 +55,15 @@ c = {
     'CORRECT_STRUCTURAL_BREAKS_TOTAL_ASSETS': True,                
     'DATA_BEGIN': None, #'2017-01-01',                              
     'DATA_END': None,                                  
-    'RESTRICT_TO_NUMBER_OF_BANKS': None,                 
-    'RESTRICT_TO_BANK_SIZE': 10e6,                      
+    'RESTRICT_TO_NUMBER_OF_BANKS': None, 
+    'RESTRICT_TO_LARGEST_BANKS': 200, # Restrict to the largest N banks by average total assets                
+    'RESTRICT_TO_BANK_SIZE': None,                      
     'RESTRICT_TO_MINIMAL_DEPOSIT_RATIO': None,          
     'RESTRICT_TO_MAX_CHANGE_IN_DEPOSIT_RATIO': None,     
     'INCLUDE_AUTOREGRESSIVE_LAGS': True,                
     'NUMBER_OF_LAGS_TO_INCLUDE': 4,                     
     'TRAIN_TEST_SPLIT_DIMENSION': 'date',               
-    'TEST_SPLIT': "2007-01-01"   # Takes a number or a date in the format 'YYYY-MM-DD'
+    'TEST_SPLIT': 0.2   # Takes a number or a date in the format 'YYYY-MM-DD'
 }
 
 
@@ -279,76 +280,27 @@ plt.tight_layout()
 plt.show()
 
 # Plot the correlation matrix as a heatmap
-import seaborn as sns
-plt.figure(figsize=(12, 10))
-sns.heatmap(correlation_matrix, annot=True, fmt=".2f", cmap='coolwarm', square=True, cbar_kws={"shrink": .8})
-plt.title("Correlation Heatmap of Target and Feature Variables")
-plt.tight_layout()
+# import seaborn as sns
+# plt.figure(figsize=(12, 10))
+# sns.heatmap(correlation_matrix, annot=True, fmt=".2f", cmap='coolwarm', square=True, cbar_kws={"shrink": .8})
+# plt.title("Correlation Heatmap of Target and Feature Variables")
+# plt.tight_layout()
+# plt.show()
+
+# Show a distribution of total assets
+print("\n--- Distribution of Total Assets -------------------------------------------------------------")
+
+# Filter data for the year 2022
+df_2022 = df_final[df_final.index.get_level_values('date').year == 2022]
+df_2022['total_assets'] = np.exp(df_2022['log_total_assets'])  # Convert log total assets back to total assets
+
+# Plot the distribution of 'total_assets' for 2022
+plt.figure(figsize=(10, 6))
+sns.histplot(df_2022['total_assets'], kde=True, bins=50)
+plt.title('Distribution of Total Assets in 2022')
+plt.xlabel('Total Assets')
+plt.ylabel('Frequency')
+plt.grid(True, linestyle='--', alpha=0.7)
 plt.show()
 
-# --- Plot Maturity Structures ---
-def plot_maturity_structure(df: pd.DataFrame):
-    """
-    Displays a stacked bar chart of deposit and loan maturities over time.
-    """
-    print("\n--- Plotting Deposit and Loan Maturity Structures ---------------------------------")
-    
-    # --- Data Preparation ---
-    df_maturities = pd.DataFrame(index=df.index)
-
-    # Sum deposit maturities
-    df_maturities['Deposits < 3m'] = df['dep_small_3m_less_to_assets'] + df['dep_large_3m_less_to_assets']
-    df_maturities['Deposits 3m-1y'] = df['dep_small_3m_1y_to_assets'] + df['dep_large_3m_1y_to_assets']
-    df_maturities['Deposits 1y-3y'] = df['dep_small_1y_3y_to_assets'] + df['dep_large_1y_3y_to_assets']
-    df_maturities['Deposits > 3y'] = df['dep_small_3y_more_to_assets'] + df['dep_large_3y_more_to_assets']
-    
-    # Sum loan maturities
-    df_maturities['Loans < 3m'] = df['closed_end_first_liens_1_4_res_prop_3m_less_to_assets'] + df['all_other_loans_3m_less_to_assets']
-    df_maturities['Loans 3m-1y'] = df['closed_end_first_liens_1_4_res_prop_3m_1y_to_assets'] + df['all_other_loans_3m_1y_to_assets']
-    df_maturities['Loans 1y-3y'] = df['closed_end_first_liens_1_4_res_prop_1y_3y_to_assets'] + df['all_other_loans_1y_3y_to_assets']
-    df_maturities['Loans 3y-5y'] = df['closed_end_first_liens_1_4_res_prop_3y_5y_to_assets'] + df['all_other_loans_3y_5y_to_assets']
-    df_maturities['Loans 5y-15y'] = df['closed_end_first_liens_1_4_res_prop_5y_15y_to_assets'] + df['all_other_loans_5y_15y_to_assets']
-    df_maturities['Loans > 15y'] = df['closed_end_first_liens_1_4_res_prop_15y_more_to_assets'] + df['all_other_loans_15y_more_to_assets']
-
-    # Add total ratios for comparison
-    df_maturities['Total Deposit Ratio'] = df['deposit_ratio']
-    df_maturities['Total Loan Ratio'] = df['loan_to_asset_ratio']
-
-    # Aggregate by date (mean across all banks)
-    agg_maturities = df_maturities.groupby('date').mean()
-
-    # --- Plotting ---
-    fig, axes = plt.subplots(2, 1, figsize=(14, 12), sharex=True)
-    
-    # Deposit Maturity Plot
-    deposit_cols = ['Deposits < 3m', 'Deposits 3m-1y', 'Deposits 1y-3y', 'Deposits > 3y']
-    agg_maturities[deposit_cols].plot(kind='bar', stacked=True, ax=axes[0], colormap='viridis')
-    agg_maturities['Total Deposit Ratio'].plot(ax=axes[0], color='red', linestyle='--', marker='o', markersize=4, label='Total Deposit Ratio (for comparison)')
-    axes[0].set_title('Deposit Maturity Structure (as % of Assets)')
-    axes[0].set_ylabel('Ratio to Assets')
-    axes[0].legend(title='Maturity Buckets')
-    
-    # Loan Maturity Plot
-    loan_cols = ['Loans < 3m', 'Loans 3m-1y', 'Loans 1y-3y', 'Loans 3y-5y', 'Loans 5y-15y', 'Loans > 15y']
-    agg_maturities[loan_cols].plot(kind='bar', stacked=True, ax=axes[1], colormap='plasma')
-    agg_maturities['Total Loan Ratio'].plot(ax=axes[1], color='blue', linestyle='--', marker='o', markersize=4, label='Total Loan Ratio (for comparison)')
-    axes[1].set_title('Loan Maturity Structure (as % of Assets)')
-    axes[1].set_ylabel('Ratio to Assets')
-    axes[1].legend(title='Maturity Buckets')
-
-    # Format x-axis ticks to be more readable
-    tick_labels = [item.strftime('%Y-Q%q') for item in agg_maturities.index]
-    axes[1].set_xticklabels(tick_labels, rotation=45, ha='right')
-    
-    plt.xlabel('Date')
-    plt.tight_layout()
-    plt.show()
-
-if 'dep_small_3m_less_to_assets' in FEATURE_VARIABLES:
-    plot_maturity_structure(df_final)
-
-# Look at the training and test sets
-print("\n--- Training and Test Sets Overview --------------------------------------------------")
-
-X_train_scaled_df, X_test_scaled_df, y_train, y_test, X_train_orig, X_test_orig = reg_data.get_horizon_specific_data(horizon=1,
-                                                                                                                          target_variable='interest_income_to_assets')
+df_final.index.get_level_values('id').nunique()
