@@ -118,6 +118,7 @@ missing_total_assets_over_time.plot(title='Missing values in log total assets ov
 plt.show()
 print(f"\nData Information Dictionary:\n{data_information}")
 
+
 #endregion
 
 #region Descriptive statistics per variable

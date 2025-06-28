@@ -18,7 +18,6 @@ from keras.models import Sequential # type: ignore
 from keras.layers import Dense, Dropout
 from keras.optimizers import Adam, RMSprop
 from keras.regularizers import l1_l2
-from sklearn.ensemble import RandomForestRegressor # Added for RandomForest
 from keras.callbacks import EarlyStopping, TensorBoard # Import TensorBoard
 from scikeras.wrappers import KerasRegressor
 
@@ -99,12 +98,9 @@ c = {
 
 
 # --- Model Selection ---
-# Options: None (all defined models), or a list of model names, e.g., ["XGBoost", "Ridge", "NeuralNetwork"]
-# Available models: "XGBoost", "RandomForest", "DecisionTree", "Lasso", "Ridge", "ElasticNet", 
-#                   "LinearRegression", "NeuralNetwork", "DummyRegressor", "RFE_LR_Pipeline_RF", "LightGBM", "CatBoost"
-# MODELS_TO_RUN = ["RFE_LR_Pipeline_LR", "RFE_LR_Pipeline_Lasso", "RFE_LR_Pipeline_Ridge", "RFE_LR_Pipeline_ElasticNet", "RFE_LR_Pipeline_DecisionTree", "RFE_LR_Pipeline_RF", "RFE_Pipeline_XGBoost"]#, "RandomForest", "RFE_Pipeline_XGBoost", "RFE_LR_Pipeline_RF", "RFE_LR_Pipeline_LR"] 
-MODELS_TO_RUN = ["LinearRegression", "Ridge", "DecisionTree", "RandomForest", "XGBoost"]#, "RandomForest", "RFE_Pipeline_XGBoost", "RFE_LR_Pipeline_RF", "RFE_LR_Pipeline_LR"] 
 
+MODELS_TO_RUN = ["LinearRegression_RFE", "Ridge_RFE", "DecisionTree_RFE", "RandomForest_RFE", "XGBoost_RFE"]
+MODELS_TO_RUN = ["LinearRegression",     "Ridge",     "DecisionTree",     "RandomForest",     "XGBoost"]
 
 
 # --- Cross-validation & Hyperparameter Tuning ---
@@ -113,7 +109,7 @@ USE_RANDOM_SEARCH_CV = True
 N_ITER_RANDOM_SEARCH = 20
 
 # --- Ensemble Configuration ---
-POTENTIAL_BASE_MODELS_FOR_ENSEMBLE = ["XGBoost", "RandomForest", "DecisionTree", "LightGBM", "CatBoost"]
+POTENTIAL_BASE_MODELS_FOR_ENSEMBLE = ["XGBoost", "RandomForest", "DecisionTree", "XGBoost_RFE", "RandomForest_RFE", "DecisionTree_RFE"]
 
 # --- TensorFlow/Keras Specifics ---
 if tf.config.list_physical_devices('GPU'):
@@ -123,7 +119,7 @@ if tf.config.list_physical_devices('GPU'):
 
 # --- Artifact Storage & Display ---
 SAVE_ARTIFACTS = True
-ARTIFACTS_BASE_DIR = "models_and_results_rfe"
+ARTIFACTS_BASE_DIR = "models_and_results_standard"
 PLOT_RESULT_CHARTS = False
 PRINT_FINAL_SUMMARY = True
 
@@ -245,11 +241,11 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
             # Let's use 'val_loss' as CV is typical, and 'loss' if CV is skipped.
             callbacks=[EarlyStopping(monitor='val_loss', patience=15, verbose=0, restore_best_weights=True, mode='min')] # Increased patience
         ),
-        "RFE_LR_Pipeline_RF": Pipeline([
+        "RandomForest_RFE": Pipeline([
             ('rfe', RFE(estimator=LinearRegression(), n_features_to_select=None)), 
             ('RandomForest', RandomForestRegressor(random_state=42, n_jobs=-1))
         ]),
-        "RFE_LR_Pipeline_LR": Pipeline([ # Added RFE with Linear Regression
+        "LinearRegression_RFE": Pipeline([ # Added RFE with Linear Regression
             ('rfe', RFE(estimator=LinearRegression(), n_features_to_select=None)), 
             ('LinearRegression', LinearRegression()) # Final estimator
         ]),
@@ -257,7 +253,7 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
             ('rfe', RFE(estimator=LinearRegression(), n_features_to_select=None)), 
             ('Lasso', Lasso(random_state=42, max_iter=15000))
         ]),
-        "RFE_LR_Pipeline_Ridge": Pipeline([ # New: RFE with Ridge
+        "Ridge_RFE": Pipeline([ # New: RFE with Ridge
             ('rfe', RFE(estimator=LinearRegression(), n_features_to_select=None)), 
             ('Ridge', Ridge(random_state=42, max_iter=15000))
         ]),
@@ -265,11 +261,11 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
             ('rfe', RFE(estimator=LinearRegression(), n_features_to_select=None)), 
             ('ElasticNet', ElasticNet(random_state=42, max_iter=15000))
         ]),
-        "RFE_LR_Pipeline_DecisionTree": Pipeline([ # New: RFE with DecisionTree
+        "DecisionTree_RFE": Pipeline([ # New: RFE with DecisionTree
             ('rfe', RFE(estimator=LinearRegression(), n_features_to_select=None)), 
             ('DecisionTree', DecisionTreeRegressor(random_state=42))
         ]),
-        "RFE_Pipeline_XGBoost": Pipeline([
+        "XGBoost_RFE": Pipeline([
             ('rfe', RFE(estimator=LinearRegression(), n_features_to_select=None)),
             ('XGBoost', XGBRegressor(random_state=42, objective='reg:squarederror', n_jobs=-1, tree_method='hist'))
         ]),
@@ -280,7 +276,7 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
     # Estimate max number of features for RFE tuning range
     # This is an approximation as actual features depend on FE/lags from DataPreparer
     # Consider time FE (e.g., 3 for quarter if OHE) and AR lags. Bank FE can be many, so RFE might not be ideal with it.
-    approx_max_features = len(FEATURE_VARIABLES) + c.get('NUMBER_OF_LAGS_TO_INCLUDE', 0) + 3 
+    approx_max_features = len(FEATURE_VARIABLES) * c.get('NUMBER_OF_LAGS_TO_INCLUDE', 0) + 3 
     if approx_max_features < 1: approx_max_features = 1 # Ensure at least 1
 
     if use_random_search:
@@ -292,7 +288,7 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
                 'l1_ratio': uniform(0.1, 0.9 - 0.1)
             },
             "DecisionTree": {
-                'max_depth': [None] + list(range(3, 21)), # Or use randint(3,21) if you want it to sample from this range
+                'max_depth': randint(3, 21),
                 'min_samples_split': randint(2, 21),
                 'min_samples_leaf': randint(1, 11)
             },
@@ -305,7 +301,7 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
             },
             "RandomForest": {
                 'n_estimators': randint(10, 201), # e.g., 10 to 200 trees
-                'max_depth': [None] + list(range(5, 31)), # Or randint(5, 31)
+                'max_depth': randint(5, 31), # Or randint(5, 31)
                 'min_samples_split': randint(2, 21),
                 'min_samples_leaf': randint(1, 11)
             },
@@ -323,7 +319,7 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
                 'model__use_batch_norm': [True, False], # Tune BatchNormalization
                 'validation_split': uniform(0.05, 0.2) # Tunable validation_split (0.05 to 0.25)
             },
-            "RFE_LR_Pipeline_RF": {
+            "RandomForest_RFE": {
                 'rfe__n_features_to_select': randint(max(1, approx_max_features // 4), max(2, approx_max_features + 1)), # Tune number of features from 1/4 to full
                 # RandomForest params need to be prefixed with 'RandomForest__' (the name in the pipeline)
                 'RandomForest__n_estimators': randint(10, 151),
@@ -331,7 +327,7 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
                 'RandomForest__min_samples_split': randint(2, 16),
                 'RandomForest__min_samples_leaf': randint(1, 11)
             },
-            "RFE_LR_Pipeline_LR": { # Param grid for RFE_LR_Pipeline_LR
+            "LinearRegression_RFE": { # Param grid for LinearRegression_RFE
                 'rfe__n_features_to_select': randint(max(1, approx_max_features // 4), max(2, approx_max_features + 1)),
                 # LinearRegression itself has few hyperparameters to tune that drastically change stability beyond feature selection
                 # 'LinearRegression__fit_intercept': [True, False] # Example if you wanted to tune LR params
@@ -340,7 +336,7 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
                 'rfe__n_features_to_select': randint(max(1, approx_max_features // 4), max(2, approx_max_features + 1)),
                 'Lasso__alpha': uniform(0.0001, 10 - 0.0001)
             },
-            "RFE_LR_Pipeline_Ridge": { # Param grid for RFE_LR_Pipeline_Ridge
+            "Ridge_RFE": { # Param grid for Ridge_RFE
                 'rfe__n_features_to_select': randint(max(1, approx_max_features // 4), max(2, approx_max_features + 1)),
                 'Ridge__alpha': uniform(0.001, 100 - 0.001)
             },
@@ -349,13 +345,13 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
                 'ElasticNet__alpha': uniform(0.001, 10 - 0.001),
                 'ElasticNet__l1_ratio': uniform(0.1, 0.9 - 0.1)
             },
-            "RFE_LR_Pipeline_DecisionTree": { # Param grid for RFE_LR_Pipeline_DecisionTree
+            "DecisionTree_RFE": { # Param grid for DecisionTree_RFE
                 'rfe__n_features_to_select': randint(max(1, approx_max_features // 4), max(2, approx_max_features + 1)),
                 'DecisionTree__max_depth': [None] + list(range(3, 21)),
                 'DecisionTree__min_samples_split': randint(2, 21),
                 'DecisionTree__min_samples_leaf': randint(1, 11)
             },
-            "RFE_Pipeline_XGBoost": {
+            "XGBoost_RFE": {
                 'rfe__n_features_to_select': randint(max(1, approx_max_features // 4), max(2, approx_max_features + 1)),
                 'XGBoost__n_estimators': randint(10, 151),
                 'XGBoost__learning_rate': uniform(0.01, 0.3 - 0.01),
@@ -411,14 +407,14 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
                 'model__use_batch_norm': [True, False],
                 'validation_split': [0.1, 0.2]
             },
-            "RFE_LR_Pipeline_RF": {
+            "RandomForest_RFE": {
                 'rfe__n_features_to_select': [max(1, approx_max_features // 3), max(1, approx_max_features * 2 // 3), approx_max_features],
                 'RandomForest__n_estimators': [50, 100],
                 'RandomForest__max_depth': [None, 10],
                 'RandomForest__min_samples_split': [2, 10],
                 'RandomForest__min_samples_leaf': [1, 5]
             },
-            "RFE_LR_Pipeline_LR": { # Param grid for RFE_LR_Pipeline_LR
+            "LinearRegression_RFE": { # Param grid for LinearRegression_RFE
                 'rfe__n_features_to_select': [max(1, approx_max_features // 3), max(1, approx_max_features * 2 // 3), approx_max_features],
                 # 'LinearRegression__fit_intercept': [True, False]
             },
@@ -426,7 +422,7 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
                 'rfe__n_features_to_select': [max(1, approx_max_features // 3), max(1, approx_max_features * 2 // 3), approx_max_features],
                 'Lasso__alpha': [0.0001, 0.001, 0.01, 0.1, 1, 10, 20]
             },
-            "RFE_LR_Pipeline_Ridge": { # Param grid for RFE_LR_Pipeline_Ridge
+            "Ridge_RFE": { # Param grid for Ridge_RFE
                 'rfe__n_features_to_select': [max(1, approx_max_features // 3), max(1, approx_max_features * 2 // 3), approx_max_features],
                 'Ridge__alpha': [0.001, 0.01, 0.1, 1, 10, 50, 100]
             },
@@ -435,13 +431,13 @@ def get_models_and_param_grids(use_random_search=False, n_iter_random_search=10)
                 'ElasticNet__alpha': [0.001, 0.01, 0.1, 1, 10],
                 'ElasticNet__l1_ratio': [0.1, 0.3, 0.5, 0.7, 0.9]
             },
-            "RFE_LR_Pipeline_DecisionTree": { # Param grid for RFE_LR_Pipeline_DecisionTree
+            "DecisionTree_RFE": { # Param grid for DecisionTree_RFE
                 'rfe__n_features_to_select': [max(1, approx_max_features // 3), max(1, approx_max_features * 2 // 3), approx_max_features],
                 'DecisionTree__max_depth': [None, 5, 10, 15, 20],
                 'DecisionTree__min_samples_split': [2, 5, 10, 20],
                 'DecisionTree__min_samples_leaf': [1, 5, 10]
             },
-            "RFE_Pipeline_XGBoost": {
+            "XGBoost_RFE": {
                 'rfe__n_features_to_select': [max(1, approx_max_features // 3), max(1, approx_max_features * 2 // 3), approx_max_features],
                 'XGBoost__n_estimators': [20, 50, 100],
                 'XGBoost__learning_rate': [0.01, 0.05, 0.1],

@@ -1,82 +1,42 @@
+import os
 import pandas as pd
 import numpy as np
+import joblib
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import mean_squared_error
 import matplotlib.pyplot as plt
 import seaborn as sns
-import joblib
-import os
-import math
-from sklearn.pipeline import Pipeline
-from IPython.display import display
 from publication_name_mapping import PUBLICATION_NAMES
 
 # --- Configuration ---
-ARTIFACTS_BASE_DIR = "models_and_results1"  # Should match 2_regressions.py
-TOP_N_FEATURES = 10  # For feature importance plots
-MODELS_FOR_FI_PLOT = ["XGBoost", "RandomForest", "DecisionTree", "RFE_Pipeline_RF"]
-
-# Suppress TensorFlow INFO and WARNING messages if Keras models are loaded
-
-# --- Helper Functions (copied from 2_regressions.py) ---
-
-def plot_aggregated_timeseries(ax, data_series, label_prefix, color, line_style='-'):
-    if not isinstance(data_series.index, pd.MultiIndex) or 'date' not in data_series.index.names:
-        print(f"Skipping {label_prefix} plot: data index is not a MultiIndex with 'date'. Index type: {type(data_series.index)}")
-        return
-    if data_series.empty:
-        print(f"Skipping {label_prefix} plot: data series is empty.")
-        return
-
-    # Ensure 'date' level is datetime for proper groupby and plotting
-    temp_series = data_series.copy()
-    if 'date' in temp_series.index.names:
-        temp_series.index = temp_series.index.set_levels(pd.to_datetime(temp_series.index.levels[temp_series.index.names.index('date')]), level='date')
-
-    quantiles_series = temp_series.groupby(level='date').quantile([0.25, 0.50, 0.75])
-    if quantiles_series.empty:
-        print(f"Warning: Empty quantiles for {label_prefix}. Skipping plot for it.")
-        return
-
-    quantiles_df = quantiles_series.unstack()
-    if not (0.25 in quantiles_df.columns and 0.50 in quantiles_df.columns and 0.75 in quantiles_df.columns):
-        print(f"Warning: Could not find all quantile columns (0.25, 0.50, 0.75) for {label_prefix}. Columns: {quantiles_df.columns}. Skipping.")
-        return
-
-    dates_idx = quantiles_df.index
-    mean_values = quantiles_df[0.50]
-    q1_values = quantiles_df[0.25]
-    q3_values = quantiles_df[0.75]
-
-    ax.plot(dates_idx, mean_values, label=f'{label_prefix} Median', color=color, linestyle=line_style) # Changed Mean to Median as per quantile
-    ax.fill_between(dates_idx, q1_values, q3_values, color=color, alpha=0.2, label=f'{label_prefix} IQR')
+ARTIFACTS_DIRS = ["models_and_results_standard", "models_and_results_rfe"]
 
 def plot_feature_importance(model, feature_names, ax=None, top_n=10, r2_score_val=None, model_display_name=None):
+    """
+    Plots feature importances or coefficients for a given model on a specific axis.
+    """
     if ax is None:
-        fig_fi, ax = plt.subplots(figsize=(10, 6))
+        fig, ax = plt.subplots(figsize=(10, 6))
 
     title_prefix = model_display_name if model_display_name else "Feature"
-    title_suffix = ""
-    if r2_score_val is not None and not np.isnan(r2_score_val):
-        title_suffix = f" (R²: {r2_score_val:.2f})"
+    title_suffix = f" (R²: {r2_score_val:.2f})" if r2_score_val is not None and not np.isnan(r2_score_val) else ""
 
     importances_values = None
     processed_feature_names = feature_names
 
     if isinstance(model, Pipeline) and 'rfe' in model.named_steps:
         rfe_step = model.named_steps['rfe']
-        # Get the name of the final estimator in the pipeline
-        final_estimator_name = [name for name in model.named_steps if name != 'rfe'][0]
+        final_estimator_name = model.steps[-1][0]
         regressor_step = model.named_steps[final_estimator_name]
 
         if hasattr(rfe_step, 'support_'):
             processed_feature_names = np.array(feature_names)[rfe_step.support_]
-            # print(f"  Features selected by RFE for {model.named_steps[final_estimator_name].__class__.__name__}: {list(processed_feature_names)}")
             if hasattr(regressor_step, 'feature_importances_'):
                 importances_values = regressor_step.feature_importances_
             elif hasattr(regressor_step, 'coef_'):
                 importances_values = regressor_step.coef_
-            ax.set_title(f'{title_prefix} Importances (RFE w/ {type(regressor_step).__name__}){title_suffix}', fontsize=9)
+            ax.set_title(f'{title_prefix} Importances (RFE){title_suffix}', fontsize=9)
         else:
-            # print(f"  RFE step in pipeline for {model.named_steps[final_estimator_name].__class__.__name__} has not been fitted or does not have 'support_' attribute.")
             ax.text(0.5, 0.5, "RFE step not fitted", ha='center', va='center', transform=ax.transAxes)
             ax.set_title(f'{title_prefix} (RFE - not fit){title_suffix}', fontsize=9)
             return
@@ -88,14 +48,7 @@ def plot_feature_importance(model, feature_names, ax=None, top_n=10, r2_score_va
         ax.set_title(f'{title_prefix} Coefficients{title_suffix}', fontsize=9)
 
     if importances_values is not None:
-        if len(importances_values.shape) > 1 and importances_values.shape[0] == 1:
-            importances_values = importances_values.flatten()
-
-        if len(importances_values) != len(processed_feature_names):
-            # print(f"Warning: Mismatch in length of importances ({len(importances_values)}) and feature names ({len(processed_feature_names)}) for {model_display_name}. Skipping feature importance plot.")
-            ax.text(0.5, 0.5, "Importance/feature name mismatch", ha='center', va='center', transform=ax.transAxes)
-            return
-
+        importances_values = importances_values.flatten()
         indices = np.argsort(np.abs(importances_values))[::-1]
         top_indices = indices[:top_n]
         top_importances = importances_values[top_indices]
@@ -109,381 +62,334 @@ def plot_feature_importance(model, feature_names, ax=None, top_n=10, r2_score_va
         ax.tick_params(axis='y', labelsize=7)
     else:
         ax.text(0.5, 0.5, "Feature importance not available", ha='center', va='center', transform=ax.transAxes)
-        if not (isinstance(model, Pipeline) and 'rfe' in model.named_steps):
-            ax.set_title(f'{title_prefix} Importance N/A{title_suffix}', fontsize=9)
+        ax.set_title(f'{title_prefix} Importance N/A{title_suffix}', fontsize=9)
 
-# --- Metric Calculation Helper (copied from 2_regressions.py and adapted) ---
-def _calculate_metrics(y_true: pd.Series, predictions: np.ndarray) -> dict:
-    """Calculates standard regression metrics."""
-    from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error # Local import
-
-    if y_true.empty or predictions is None or len(predictions) != len(y_true):
-        return {'MAE': np.nan, 'MSE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan}
-
-    # Ensure predictions is a 1D array if it's not already (e.g. Keras might return (N,1))
-    if predictions.ndim > 1 and predictions.shape[1] == 1:
-        predictions = predictions.flatten()
-    
-    # Align predictions with y_true if y_true is a Series with an index
-    # and predictions is a numpy array that needs to be converted to a Series
-    if isinstance(y_true, pd.Series) and isinstance(predictions, np.ndarray):
-        if len(predictions) == len(y_true.index):
-            predictions_series = pd.Series(predictions, index=y_true.index)
-        else: # Length mismatch, cannot safely align
-            print(f"Warning: Length mismatch between y_true ({len(y_true)}) and predictions ({len(predictions)}). Cannot align for metrics.")
-            return {'MAE': np.nan, 'MSE': np.nan, 'RMSE': np.nan, 'R2': np.nan, 'MAPE': np.nan}
-    elif isinstance(predictions, pd.Series):
-        predictions_series = predictions
-    else: # Both are numpy arrays or other unhandled types
-        predictions_series = pd.Series(predictions) # Convert to series for consistency if y_true is also array
-
-    mae = mean_absolute_error(y_true, predictions_series)
-    mse = mean_squared_error(y_true, predictions_series)
-    rmse = np.sqrt(mse)
-    r2 = r2_score(y_true, predictions_series)
-
-    y_true_no_zeros = y_true.replace(0, np.nan).dropna()
-    mape = np.nan
-    if not y_true_no_zeros.empty:
-        predictions_aligned_for_mape = predictions_series.loc[y_true_no_zeros.index]
-        mape = np.mean(np.abs((y_true_no_zeros - predictions_aligned_for_mape) / y_true_no_zeros)) * 100
-    return {'MAE': mae, 'MSE': mse, 'RMSE': rmse, 'R2': r2, 'MAPE': mape} 
-
-# New helper functions for data characteristics
-def load_results_store(artifacts_dir: str) -> dict:
-    """Loads the results_store dictionary."""
-    path = os.path.join(artifacts_dir, "results_store.joblib")
-    return joblib.load(path)
-
-def load_data_for_horizon(artifacts_dir: str, target_variable_name: str, horizon: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
+def get_model_information():
     """
-    Loads the scaled training and testing feature sets (X) and target variables (y)
-    for a specific target variable and forecast horizon.
+    Scans specified artifact directories, loads models and test data,
+    and calculates the RMSE for each model.
     """
-    target_specific_artifact_dir = os.path.join(artifacts_dir, f"target_{target_variable_name}")
-    data_dir = os.path.join(target_specific_artifact_dir, f"horizon_{horizon}", "data")
+    all_results = []
 
-    X_train_path = os.path.join(data_dir, "X_train_scaled.parquet")
-    X_test_path = os.path.join(data_dir, "X_test_scaled.parquet")
-    y_train_path = os.path.join(data_dir, "y_train.parquet")
-    y_test_path = os.path.join(data_dir, "y_test.parquet")
+    print("--- Starting RMSE Calculation ---")
 
-    X_train_scaled_df = pd.read_parquet(X_train_path)
-    X_test_scaled_df = pd.read_parquet(X_test_path)
-    y_train_df = pd.read_parquet(y_train_path)
-    y_test_df = pd.read_parquet(y_test_path)
-    
-    y_train = y_train_df[y_train_df.columns[0]]
-    y_test = y_test_df[y_test_df.columns[0]]
+    for base_dir in ARTIFACTS_DIRS:
+        if not os.path.exists(base_dir):
+            print(f"Warning: Directory not found, skipping: {base_dir}")
+            continue
 
-    return X_train_scaled_df, X_test_scaled_df, y_train, y_test
+        run_type = 'RFE' if 'rfe' in base_dir.lower() else 'Standard'
+        print(f"\nProcessing directory: {base_dir} (Run Type: {run_type})")
 
-def get_data_characteristics_per_model(artifacts_base_dir: str) -> pd.DataFrame:
-    """
-    Generates a DataFrame listing the number of unique banks, dates, and total
-    observations for the training and testing sets, broken down by target variable,
-    forecast horizon, and model.
-    """
-    results_store = load_results_store(artifacts_base_dir)
-    all_data_characteristics = []
-
-    for target_variable, horizons_data in results_store.items():
-        for horizon_val, models_data in horizons_data.items():
-            X_train_scaled_df, X_test_scaled_df, y_train, y_test = load_data_for_horizon(artifacts_base_dir, target_variable, horizon_val)
-            train_unique_banks = X_train_scaled_df.index.get_level_values('id').nunique()
-            train_unique_dates = X_train_scaled_df.index.get_level_values('date').nunique()
-            train_observations = len(X_train_scaled_df)
+        for target_dir_name in sorted(os.listdir(base_dir)):
+            if not target_dir_name.startswith("target_"):
+                continue
             
-            test_unique_banks = X_test_scaled_df.index.get_level_values('id').nunique()
-            
-            total_unique_banks = pd.Series(X_train_scaled_df.index.get_level_values('id').tolist() + X_test_scaled_df.index.get_level_values('id').tolist()).nunique()
-            test_unique_dates = X_test_scaled_df.index.get_level_values('date').nunique()
-            test_observations = len(X_test_scaled_df)
-            for model_name in models_data.keys():
-                all_data_characteristics.append({'Target Variable': target_variable, 'Horizon': horizon_val, 'Model Name': model_name, 'Train_Unique_Banks': train_unique_banks, 'Train_Unique_Dates': train_unique_dates, 'Train_Observations': train_observations, 'Test_Unique_Banks': test_unique_banks, 'Test_Unique_Dates': test_unique_dates, 'Test_Observations': test_observations, 'Total_Unique_Banks': total_unique_banks})
-    return pd.DataFrame(all_data_characteristics)
+            target_variable_raw = target_dir_name.replace("target_", "")
+            target_variable = PUBLICATION_NAMES.get(target_variable_raw, target_variable_raw)
+            target_path = os.path.join(base_dir, target_dir_name)
 
+            if not os.path.isdir(target_path):
+                continue
 
+            print(f"  Target: {target_variable}")
 
-if not os.path.exists(ARTIFACTS_BASE_DIR):
-    print(f"Artifacts directory not found: {ARTIFACTS_BASE_DIR}")
-    exit()
-
-all_calculated_metrics = [] # To store metrics for all models, targets, horizons
-
-for target_dir_name in os.listdir(ARTIFACTS_BASE_DIR):
-    if target_dir_name.startswith("target_"):
-        current_target_variable = target_dir_name.replace("target_", "")
-        pub_target_name = PUBLICATION_NAMES.get(current_target_variable, current_target_variable)
-        target_path = os.path.join(ARTIFACTS_BASE_DIR, target_dir_name)
-
-        print(f"\n--- Inspecting Target Variable: {pub_target_name} ---")
-
-        for horizon_dir_name in os.listdir(target_path):
-            if horizon_dir_name.startswith("horizon_"):
-                horizon_val_str = horizon_dir_name.replace("horizon_", "")
-                horizon_val = int(horizon_val_str)
-                current_artifact_dir = os.path.join(target_path, horizon_dir_name)
-                data_dir = os.path.join(current_artifact_dir, "data")
-
-                print(f"  -- Horizon: {horizon_val} --")
-
-                # Load data
-                X_train_path = os.path.join(data_dir, "X_train_scaled.parquet")
-                X_test_path = os.path.join(data_dir, "X_test_scaled.parquet")
-                y_train_path = os.path.join(data_dir, "y_train.parquet")
-                y_test_path = os.path.join(data_dir, "y_test.parquet")
-
-                if not all(map(os.path.exists, [X_train_path, X_test_path, y_train_path, y_test_path])):
-                    print(f"    Skipping horizon {horizon_val} for target {current_target_variable}: Missing one or more data files in {data_dir}")
+            for horizon_dir_name in sorted(os.listdir(target_path)):
+                if not horizon_dir_name.startswith("horizon_"):
+                    continue
+                
+                horizon = int(horizon_dir_name.replace("horizon_", ""))
+                horizon_path = os.path.join(target_path, horizon_dir_name)
+                if not os.path.isdir(horizon_path):
                     continue
 
-                X_train_scaled_df = pd.read_parquet(X_train_path)
-                X_test_scaled_df = pd.read_parquet(X_test_path)
-                y_train_df = pd.read_parquet(y_train_path)
+                # --- Load Test Data for this Horizon ---
+                data_dir = os.path.join(horizon_path, "data")
+                X_test_path = os.path.join(data_dir, "X_test_scaled.parquet")
+                y_test_path = os.path.join(data_dir, "y_test.parquet")
+
+                if not os.path.exists(X_test_path) or not os.path.exists(y_test_path):
+                    print(f"    Horizon {horizon}: Skipping, missing X_test or y_test data.")
+                    continue
+
+                X_test = pd.read_parquet(X_test_path)
+                X_train = pd.read_parquet(os.path.join(data_dir, "X_train_scaled.parquet"))
                 y_test_df = pd.read_parquet(y_test_path)
-                
-                y_train = y_train_df[y_train_df.columns[0]]
                 y_test = y_test_df[y_test_df.columns[0]]
-                
-                feature_names = X_train_scaled_df.columns.tolist()
+                y_train = pd.read_parquet(os.path.join(data_dir, "y_train.parquet"))
 
-                # --- Plot Predictions vs Actuals ---
-                models_to_plot_pred = []
-                for item_name in os.listdir(current_artifact_dir):
-                    if item_name.endswith(".joblib") and item_name != "results_store.joblib":
-                        model_name = item_name.replace(".joblib", "")
-                        model_path = os.path.join(current_artifact_dir, item_name)
-                        models_to_plot_pred.append({'name': model_name, 'path': model_path})
-                
-                if models_to_plot_pred:
-                    num_cols_pred = 3
-                    num_rows_pred = math.ceil(len(models_to_plot_pred) / num_cols_pred)
-                    fig_pred, axes_pred = plt.subplots(num_rows_pred, num_cols_pred, figsize=(18, 5 * num_rows_pred), squeeze=False)
-                    axes_pred_flat = axes_pred.flatten()
-                    plot_idx_pred = 0
+                # --- Iterate through models in the horizon directory ---
+                for model_filename in sorted(os.listdir(horizon_path)):
+                    if not model_filename.endswith(".joblib") or model_filename == "results_store.joblib":
+                        continue
 
-                    for model_info in models_to_plot_pred:
-                        model_name = model_info['name']
-                        ax = axes_pred_flat[plot_idx_pred]
-                        
-                        try:
-                            model = joblib.load(model_info['path'])
-                        except Exception as e:
-                            print(f"    Error loading model {model_name} for {current_target_variable}, H{horizon_val}: {e}")
-                            ax.text(0.5, 0.5, f"Error loading model:\n{model_name}", ha='center', va='center', transform=ax.transAxes, color='red')
-                            ax.set_title(f"{model_name} (Load Error)", fontsize=10)
-                            plot_idx_pred += 1
-                            continue
+                    model_name = model_filename.replace(".joblib", "")
+                    model_path = os.path.join(horizon_path, model_filename)
+                    data_dir_path = os.path.join(horizon_path, "data")
 
-                        predictions_train_raw = model.predict(X_train_scaled_df)
-                        predictions_train_series = pd.Series(predictions_train_raw, index=y_train.index)
-                        predictions_test_raw = model.predict(X_test_scaled_df)
-                        predictions_test_series = pd.Series(predictions_test_raw, index=y_test.index)
-
-                        train_metrics = _calculate_metrics(y_train, predictions_train_raw)
-                        test_metrics = _calculate_metrics(y_test, predictions_test_raw)
-                        
-                        current_model_metrics = {
-                            'TargetVariable': current_target_variable, 'Horizon': horizon_val, 'Model': model_name,
-                            **{f"Train_{k}": v for k, v in train_metrics.items()},
-                            **{f"Test_{k}": v for k, v in test_metrics.items()}
-                        }
-                        all_calculated_metrics.append(current_model_metrics)
-
-                        plot_aggregated_timeseries(ax, y_train, 'Actual Train', 'blue')
-                        plot_aggregated_timeseries(ax, predictions_train_series, 'Predicted Train', 'orange', line_style='--')
-                        plot_aggregated_timeseries(ax, y_test, 'Actual Test', 'green')
-                        plot_aggregated_timeseries(ax, predictions_test_series, 'Predicted Test', 'red', line_style='--')
-                        
-                        ax.set_title(f"{model_name} (Test MAPE: {test_metrics.get('MAPE', float('nan')):.2f}%)", fontsize=10)
-                        ax.set_xlabel('Date', fontsize=8)
-                        ax.set_ylabel(pub_target_name, fontsize=8)
-                        if not y_train.empty or not y_test.empty:
-                            ax.xaxis.set_major_formatter(plt.matplotlib.dates.DateFormatter('%Y-%m'))
-                        ax.tick_params(axis='x', rotation=45, labelsize=7)
-                        ax.tick_params(axis='y', labelsize=7)
-                        ax.legend(fontsize=7)
-                        ax.grid(True, linestyle='--', alpha=0.7)
-                        plot_idx_pred += 1
+                    # Load model
+                    model = joblib.load(model_path)
                     
-                    for i in range(plot_idx_pred, len(axes_pred_flat)): fig_pred.delaxes(axes_pred_flat[i])
-                    plt.tight_layout(rect=[0, 0, 1, 0.97]) # Adjust rect for suptitle
-                    plt.show()
+                    # Make predictions
+                    predictions = model.predict(X_test)
+                    
+                    # Calculate Scores
+                    mse  = mean_squared_error(y_test, predictions)
+                    rmse = np.sqrt(mse)
+                    mae  = np.mean(np.abs(y_test - predictions))
 
-                # --- Plot Feature Importances ---
-                models_for_fi_this_run = [m for m in MODELS_FOR_FI_PLOT if os.path.exists(os.path.join(current_artifact_dir, f"{m}.joblib"))]
-                if models_for_fi_this_run:
-                    num_fi_cols = 3
-                    num_fi_rows = math.ceil(len(models_for_fi_this_run) / num_fi_cols)
-                    fig_fi, axes_fi = plt.subplots(num_fi_rows, num_fi_cols, figsize=(num_fi_cols * 4.5, num_fi_rows * 4), squeeze=False) # Adjusted figsize
-                    axes_fi_flat = axes_fi.flatten()
-                    plot_idx_fi = 0
+                     # Handle potential division by zero for MAPE
+                    if (y_test == 0).any():
+                        mape = np.mean(np.abs((y_test - predictions) / y_test.replace(0, np.nan))) * 100
+                    else:
+                        mape = np.mean(np.abs((y_test - predictions) / y_test)) * 100
+                                            
+                    r2   = model.score(X_test, y_test)
+                    
+                    # Nr of NAs in training and test data
+                    num_nas_train = X_test.isna().sum().sum()
+                    num_nas_test  = y_test.isna().sum()
 
-                    for model_name_fi in models_for_fi_this_run:
-                        ax_fi = axes_fi_flat[plot_idx_fi]
-                        model_path_fi = os.path.join(current_artifact_dir, f"{model_name_fi}.joblib")
-                        model_obj_fi = joblib.load(model_path_fi)
+                    # Nr banks and dates
+                    num_banks_test = X_test.index.get_level_values('id').nunique()
+                    num_banks_train = X_train.index.get_level_values('id').nunique()
+                    avg_dates_per_bank_test = X_test.reset_index().groupby('id')['date'].nunique().mean()
+                    avg_dates_per_bank_train = X_train.reset_index().groupby('id')['date'].nunique().mean()
 
-                        # Find the metrics for this model, target, horizon
-                        r2_val_fi = np.nan
-                        for m_metrics in all_calculated_metrics:
-                            if m_metrics['TargetVariable'] == current_target_variable and \
-                                m_metrics['Horizon'] == horizon_val and \
-                                m_metrics['Model'] == model_name_fi:
-                                r2_val_fi = m_metrics.get('Test_R2', np.nan)
-                                break
-                        
-                        plot_feature_importance(
-                            model_obj_fi, feature_names, ax=ax_fi,
-                            top_n=TOP_N_FEATURES, r2_score_val=r2_val_fi, 
-                            model_display_name=model_name_fi
-                        )
-                        plot_idx_fi += 1
+                    # Hyperparameters and model information
+                    hyperparameters = model.get_params()
 
-                    for i in range(plot_idx_fi, len(axes_fi_flat)): fig_fi.delaxes(axes_fi_flat[i])
-                    plt.tight_layout(rect=[0, 0, 1, 0.96]) # Adjust rect for suptitle
-                    plt.show()
+                    # Number of features the model uses
+                    if hasattr(model, 'named_steps') and 'rfe' in model.named_steps:
+                        # It's a pipeline with an RFE step.
+                        # Get the number of selected features by summing the support mask.
+                        rfe_step = model.named_steps['rfe']
+                        if hasattr(rfe_step, 'support_'):
+                            num_features = rfe_step.support_.sum()
+                        else:
+                            # Fallback if RFE step is not fitted
+                            num_features = np.nan
+                    elif hasattr(model, 'n_features_in_'):
+                        # It's a standard estimator, get the number of input features
+                        num_features = model.n_features_in_
+                    else:
+                        num_features = X_test.shape[1]
+                    # Store result
+                    all_results.append({
+                        'RunType': run_type,
+                        'Target': target_variable,
+                        'Horizon': horizon,
+                        'Model': model_name,
+                        'ModelPath': model_path,
+                        'DataDir': data_dir_path,
+                        'Hyperparameters': hyperparameters,
+                        'RMSE': rmse,
+                        'MSE': mse,
+                        'MAE': mae,
+                        'MAPE': mape,
+                        'R2': r2,
+                        'NumFeatures': num_features,
+                        'NumNAsTrain': num_nas_train,
+                        'NumNAsTest': num_nas_test,
+                        'NumBanksTest': num_banks_test,
+                        'NumBanksTrain': num_banks_train,
+                        'StartDateTrain': X_train.index.get_level_values('date').min(),
+                        'EndDateTrain': X_train.index.get_level_values('date').max(),
+                        'StartDateTest': X_test.index.get_level_values('date').min(),
+                        'EndDateTest': X_test.index.get_level_values('date').max(),
+                        'AvgDatesPerBankTest': avg_dates_per_bank_test,
+                        'AvgDatesPerBankTrain': avg_dates_per_bank_train
+                    })
 
-                # --- Display Selected Features for RFE Models ---
-                print(f"    Selected Features by RFE Models (Target: {pub_target_name}, Horizon: {horizon_val}):")
-                found_rfe = False
-                for item_name in os.listdir(current_artifact_dir):
-                    if item_name.endswith(".joblib") and "RFE" in item_name: # Simple check for RFE in name
-                        model_name_rfe = item_name.replace(".joblib", "")
-                        model_path_rfe = os.path.join(current_artifact_dir, item_name)
-                        model_obj_rfe = joblib.load(model_path_rfe)
+                    
 
-                        if isinstance(model_obj_rfe, Pipeline) and 'rfe' in model_obj_rfe.named_steps:
-                            rfe_step = model_obj_rfe.named_steps['rfe']
-                            final_estimator_name = [name for name in model_obj_rfe.named_steps if name != 'rfe'][0]
-                            if hasattr(rfe_step, 'support_') and rfe_step.support_ is not None:
-                                selected_features_raw = np.array(feature_names)[rfe_step.support_]
-                                selected_features = [PUBLICATION_NAMES.get(name, name) for name in selected_features_raw]
-                                print(f"      Model: {model_name_rfe} (Estimator: {final_estimator_name})")
-                                print(f"        Selected {len(selected_features)} features: {list(selected_features)}")
-                                found_rfe = True
-                            else:
-                                print(f"      Model: {model_name_rfe} - RFE step not fitted or 'support_' not available.")
-                if not found_rfe:
-                    print("      No RFE models with selection info found for this horizon.")
+    all_results = pd.DataFrame(all_results)
+    all_results.sort_values(by=['RunType', 'Target', 'Horizon', 'RMSE'], inplace=True)
+    return all_results
 
-# --- Display Aggregated Metrics ---
-if all_calculated_metrics:
-    metrics_df = pd.DataFrame(all_calculated_metrics)
-    metrics_df['TargetVariable'] = metrics_df['TargetVariable'].map(PUBLICATION_NAMES).fillna(metrics_df['TargetVariable'])
-    # Define a more comprehensive column order
-    metric_cols_ordered = ['TargetVariable', 'Horizon', 'Model', 
-                            'Test_RMSE', 'Test_MAE', 'Test_R2', 'Test_MAPE', 
-                            'Train_RMSE', 'Train_MAE', 'Train_R2', 'Train_MAPE',
-                            'Test_MSE', 'Train_MSE']
-    # Filter to only existing columns in metrics_df to avoid KeyError
-    existing_metric_cols = [col for col in metric_cols_ordered if col in metrics_df.columns]
-    metrics_df = metrics_df[existing_metric_cols]
-    metrics_df = metrics_df.sort_values(by=['TargetVariable', 'Horizon', 'Test_RMSE'])
+
+model_information = get_model_information()
+
+# --- Create and Display Pivot Tables ---
+print("\n--- Generating Comparison Tables (for Horizon 1) ---")
+
+# Filter for a single horizon to make the pivot tables 2D
+# This assumes horizon 1 is the primary one of interest for this comparison
+horizon_1_data = model_information[model_information['Horizon'] == 1].copy()
+
+# Add a 'BaseModel' column for grouping RFE and Standard models
+horizon_1_data['BaseModel'] = horizon_1_data['Model'].str.replace('_RFE', '', regex=False)
+
+# --- Number of Features Table ---
+print("\n\n--- Table: Number of Features Used by Model ---")
+features_pivot = horizon_1_data.pivot_table(
+    index='BaseModel',
+    columns=['Target', 'RunType'],
+    values='NumFeatures'
+)
+features_pivot = features_pivot.fillna('-') # For clarity
+with pd.option_context('display.max_rows', None, 'display.max_columns', None, 'display.width', 200):
+    print(features_pivot)
+
+
+# --- Hyperparameters Table ---
+print("\n\n--- Table: Hyperparameters by Model ---")
+
+# Convert the dictionary of hyperparameters to a string for display
+horizon_1_data['Hyperparameters_str'] = horizon_1_data['Hyperparameters'].astype(str)
+
+hyperparams_pivot = horizon_1_data.pivot_table(
+    index='Target',
+    columns=['BaseModel', 'RunType'],
+    values='Hyperparameters_str',
+    aggfunc='first'  # Use 'first' as each combination should be unique for a given horizon
+)
+hyperparams_pivot = hyperparams_pivot.fillna('N/A')
+
+# Display the full table without truncation
+with pd.option_context('display.max_rows', None, 'display.max_columns', None, 'display.width', 1000):
+    print(hyperparams_pivot)
+
+# --- Create Faceted Bar Chart ---
+print("\n--- Generating Performance Chart ---")
+
+# Define the desired order for the target variables
+target_order = [
+    'Interest Income / Assets',
+    'Interest Expense / Assets',
+    'Non-Interest Income / Assets',
+    'Non-Interest Expense / Assets',
+    'Net Charge-Offs / Loans'
+]
+
+# Convert 'Target' column to a categorical type with the specified order
+# This ensures the facets in the plot appear in the desired order.
+model_information['Target'] = pd.Categorical(
+    model_information['Target'],
+    categories=target_order,
+    ordered=True
+)
+model_information.dropna(subset=['Target'], inplace=True)
+model_information.sort_values(by=['Target', 'RunType', 'RMSE'], inplace=True)
+
+# Add a 'BaseModel' column for grouping RFE and Standard models
+model_information['BaseModel'] = model_information['Model'].str.replace('_RFE', '', regex=False)
+
+# Create a FacetGrid. With 5 targets, col_wrap=3 results in a 2-row layout.
+g = sns.FacetGrid(
+    model_information,
+    col='Target',
+    col_wrap=2,
+    height=5,
+    aspect=1.2,
+    sharex=False,
+    sharey=False
+)
+
+# Define a function to plot on each facet, ordering models by their average RMSE
+def plot_rmse_bars(data, **kwargs):
+    # Sort models on the y-axis by the minimum RMSE between their Standard and RFE runs
+    model_order = data.groupby('BaseModel')['RMSE'].min().sort_values(ascending=True).index
+    ax = plt.gca()
+    sns.barplot(x='RMSE', y='BaseModel', hue='RunType', data=data, order=model_order, orient='h', ax=ax)
+    ax.grid(axis='x', linestyle='--', alpha=0.7)
+
+    # Annotate bars with MAPE and R2.
+    # This manual annotation approach is more robust than using bar_label
+    # when dealing with grouped bars and potential NaNs.
     
-    print("\n\n--- Aggregated Performance Metrics ---")
-    with pd.option_context('display.max_rows', None, 'display.max_columns', None, 'display.width', 200):
-        display(metrics_df)
+    # Get the y-tick positions and their corresponding labels (model names)
+    y_ticks_positions = {label.get_text(): pos for pos, label in zip(ax.get_yticks(), ax.get_yticklabels())}
 
+    # Determine the order of hues (RunType) used by seaborn
+    hue_order = [t.get_text() for t in ax.get_legend().get_texts()] if ax.get_legend() else data['RunType'].unique()
+    num_hues = len(hue_order)
+    bar_height_total = 0.8  # Default width of a bar group in matplotlib
+    bar_height_single = bar_height_total / num_hues
 
-    # --- New Plot: Horizontal Bar Chart of Test_RMSE per Target Variable ---
-    if not metrics_df.empty and 'Test_RMSE' in metrics_df.columns and \
-        'TargetVariable' in metrics_df.columns and 'Model' in metrics_df.columns:
-        
-        plot_data_rmse_bars = metrics_df.dropna(subset=['Test_RMSE'])
+    for model_name in model_order:
+        y_base = y_ticks_positions.get(model_name)
+        if y_base is None: continue
 
-        if not plot_data_rmse_bars.empty:
-            num_unique_targets = plot_data_rmse_bars['TargetVariable'].nunique()
-            g = sns.FacetGrid(plot_data_rmse_bars, col='TargetVariable', 
-                                col_wrap=min(3, num_unique_targets if num_unique_targets > 0 else 1), 
-                                height=5, aspect=1.2, sharey=False, sharex=False)
+        for i, run_type in enumerate(hue_order):
+            row = data[(data['BaseModel'] == model_name) & (data['RunType'] == run_type)]
+            if not row.empty and pd.notna(row['RMSE'].iloc[0]):
+                rmse_val = row['RMSE'].iloc[0]
+                r2_val = row['R2'].iloc[0]
+                y_pos = y_base - (bar_height_total / 2) + (bar_height_single / 2) + (i * bar_height_single)
+                if pd.notna(r2_val):
+                    ax.text(rmse_val / 2, y_pos, f"R²: {r2_val:.2f}", ha='center', va='center', color='white', fontsize=10)
 
-            def plot_sorted_rmse_bars(data, **kwargs):
-                ax = plt.gca()
-                data_to_plot = data.copy()
-                data_to_plot['display_model_name'] = data_to_plot['Model']
-                data_to_plot['plot_Test_RMSE'] = data_to_plot['Test_RMSE']
+g.map_dataframe(plot_rmse_bars)
+g.set_titles("Target: {col_name}")
+g.set_xlabels("RMSE")
+g.set_ylabels("Model")
+g.add_legend(title='Run Type')
+plt.tight_layout(rect=[0, 0, 1, 0.97])
+plt.show()
+# Save chart
+chart_filename = "model_performance_comparison.png"
+chart_path = os.path.join("plots", chart_filename)
+os.makedirs(os.path.dirname(chart_path), exist_ok=True)
+g.savefig(chart_path, bbox_inches='tight')
 
-                # Clipping logic for LinearRegression
-                if 'LinearRegression' in data_to_plot['Model'].values:
-                    lr_indices = data_to_plot['Model'] == 'LinearRegression'
-                    lr_rmse_mean = data_to_plot.loc[lr_indices, 'Test_RMSE'].mean()
-                    
-                    other_models_rmses = data_to_plot.loc[~lr_indices, 'Test_RMSE']
-                    if not other_models_rmses.empty:
-                        max_other_rmse = other_models_rmses.max() # Max of means if multiple horizons
-                        # If LR's mean RMSE is 20% worse than the max of other models' mean RMSEs
-                        if lr_rmse_mean > max_other_rmse * 1.2:
-                            clip_value = max_other_rmse * 1.1 # Clip to 10% worse
-                            data_to_plot.loc[lr_indices, 'plot_Test_RMSE'] = clip_value
-                            data_to_plot.loc[lr_indices, 'display_model_name'] = 'LinearRegression (clipped)'
-                            print(f"Info: Clipped LinearRegression RMSE from {lr_rmse_mean:.2f} to {clip_value:.2f} for target {data['TargetVariable'].iloc[0]}")
+# --- Generate Feature Importance Charts ---
+print("\n--- Generating Feature Importance Charts ---")
 
-                # Sort models by their (potentially clipped) mean Test_RMSE
-                # Group by display_model_name to handle the "(clipped)" case correctly for sorting
-                sorted_models_by_rmse = data_to_plot.groupby('display_model_name')['plot_Test_RMSE'].mean().sort_values(ascending=True).index
-                
-                sns.barplot(x='Test_RMSE', y='Model', data=data, orient='h', 
-                            order=sorted_models_by_rmse, estimator=np.mean, errorbar=None, **kwargs)
-                # Annotate bars with R2 and MAPE
-                for i, patch in enumerate(ax.patches):
-                    display_name_on_bar = sorted_models_by_rmse[i] # This is the 'display_model_name'
-                    original_model_name = display_name_on_bar.replace(" (clipped)", "")
-                    
-                    # Get mean R2 and MAPE for the original model name from the facet's data
-                    model_metrics_in_facet = data[data['Model'] == original_model_name]
-                    r2_val = model_metrics_in_facet['Test_R2'].mean()
-                    mape_val = model_metrics_in_facet['Test_MAPE'].mean()
+MODELS_FOR_FI_PLOT = ["XGBoost", "RandomForest", "DecisionTree", "Ridge"]
+TOP_N_FEATURES = 15
+HORIZON_TO_PLOT = 1
 
-                    bar_end_x = patch.get_width()
-                    bar_y_center = patch.get_y() + patch.get_height() / 2.0
-                    text_content = f"R² {r2_val:.2f}\nMAPE {mape_val:.1f}%"
-                    
-                    text_x = bar_end_x * 0.98
-                    ha = 'right'
-                    text_color = 'white'
-                    if bar_end_x < (ax.get_xlim()[1] * 0.25): # If bar is short
-                        text_x = bar_end_x + (ax.get_xlim()[1] * 0.01)
-                        ha = 'left'
-                        text_color = 'black'
-                    
-                    ax.text(text_x, bar_y_center, text_content, 
-                            ha=ha, va='center', color=text_color, fontsize=6, fontweight='bold')
+fi_data = model_information[model_information['Horizon'] == HORIZON_TO_PLOT]
+unique_targets = sorted(fi_data['Target'].unique())
 
-            g.map_dataframe(plot_sorted_rmse_bars)
-
-            g.set_titles("Target: {col_name}")
-            g.set_xlabels("Test RMSE")
-            g.set_ylabels("Model")
-            g.tight_layout(rect=[0, 0, 1, 0.97])
-            plt.show()
-        else:
-            print("\nCannot plot Test_RMSE bars: No valid data after filtering NaNs for Test_RMSE.")
-else:
-    print("\nNo metrics were calculated to display.") 
-
-print("\n\n--- Data Characteristics per Model ---")
-all_dirs = ["models_and_results1", "models_and_results_rfe"]
-all_char_dfs = []
-
-for artifacts_dir in all_dirs:
-    if not os.path.exists(artifacts_dir):
-        print(f"Warning: Artifacts directory not found, skipping: {artifacts_dir}")
+for target_name in unique_targets:
+    target_df = fi_data[fi_data['Target'] == target_name]
+    
+    available_models = sorted([m for m in MODELS_FOR_FI_PLOT if m in target_df['BaseModel'].unique()])
+    if not available_models:
         continue
-    
-    print(f"\n--- Processing data characteristics for: {artifacts_dir} ---")
-    char_df = get_data_characteristics_per_model(artifacts_dir)
-    
-    # Add a column to identify the source of the model run
-    char_df['ModelType'] = 'RFE' if 'rfe' in artifacts_dir.lower() else 'Standard'
-    all_char_dfs.append(char_df)
 
-if all_char_dfs:
-    data_characteristics_df = pd.concat(all_char_dfs, ignore_index=True)
-    cols = data_characteristics_df.columns.tolist()
-    cols.insert(0, cols.pop(cols.index('ModelType')))
-    data_characteristics_df = data_characteristics_df[cols]
-    display(data_characteristics_df)
+    fig, axes = plt.subplots(
+        nrows=len(available_models), 
+        ncols=2, 
+        figsize=(14, 5 * len(available_models)), 
+        squeeze=False
+    )
+    fig.suptitle(f"Feature Importance for: {target_name} (Horizon {HORIZON_TO_PLOT})", fontsize=16)
 
-print("\n--- Model Inspection Complete ---")
+    for i, base_model_name in enumerate(available_models):
+        # --- Standard Model (Left) ---
+        ax_std = axes[i, 0]
+        std_model_info = target_df[(target_df['BaseModel'] == base_model_name) & (target_df['RunType'] == 'Standard')]
+        
+        if not std_model_info.empty:
+            info = std_model_info.iloc[0]
+            model = joblib.load(info['ModelPath'])
+            X_train = pd.read_parquet(os.path.join(info['DataDir'], "X_train_scaled.parquet"))
+            feature_names = X_train.columns.tolist()
+            plot_feature_importance(model, feature_names, ax=ax_std, top_n=TOP_N_FEATURES, r2_score_val=info['R2'], model_display_name=f"{base_model_name} (Standard)")
+        else:
+            ax_std.text(0.5, 0.5, "Standard model not available", ha='center', va='center')
+            ax_std.set_title(f"{base_model_name} (Standard)")
+
+        # --- RFE Model (Right) ---
+        ax_rfe = axes[i, 1]
+        rfe_model_info = target_df[(target_df['BaseModel'] == base_model_name) & (target_df['RunType'] == 'RFE')]
+
+        if not rfe_model_info.empty:
+            info = rfe_model_info.iloc[0]
+            model = joblib.load(info['ModelPath'])
+            X_train = pd.read_parquet(os.path.join(info['DataDir'], "X_train_scaled.parquet"))
+            feature_names = X_train.columns.tolist()
+            plot_feature_importance(model, feature_names, ax=ax_rfe, top_n=TOP_N_FEATURES, r2_score_val=info['R2'], model_display_name=f"{base_model_name} (RFE)")
+        else:
+            ax_rfe.text(0.5, 0.5, "RFE model not available", ha='center', va='center')
+            ax_rfe.set_title(f"{base_model_name} (RFE)")
+
+    plt.tight_layout(rect=[0, 0.03, 1, 0.97])
+    chart_filename = f"feature_importance_{target_name.replace(' / ', '_').replace(' ', '_').lower()}_h{HORIZON_TO_PLOT}.png"
+    chart_path = os.path.join("plots", chart_filename)
+    fig.savefig(chart_path, bbox_inches='tight')
+    print(f"  Saved feature importance chart to {chart_path}")
+    plt.close(fig)
