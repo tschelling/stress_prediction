@@ -123,22 +123,33 @@ print(f"\nData Information Dictionary:\n{data_information}")
 
 #region Descriptive statistics per variable
 
-show_variables = list(TARGET_VARIABLES.keys()) + list(FEATURE_VARIABLES.keys())
-
 print("\n--- Descriptive Statistics per Variable -------------------------------------------------------------")
-temp = reg_data.final_data[show_variables].stack().rename_axis(index=['id', 'date', 'variable']).rename('value')
-temp = pd.DataFrame(temp.astype(float))
-descriptive_statistics = temp.dropna().groupby('variable').describe()
 
-print("\n--- Latex ---")
-# Separate descriptive statistics for bank and macro variables
+# Define bank and macro variables
 bank_vars = [var for var, var_type in TARGET_VARIABLES.items() if var_type == 'bank'] + \
             [var for var, var_type in FEATURE_VARIABLES.items() if var_type == 'bank']
 macro_vars = [var for var, var_type in FEATURE_VARIABLES.items() if var_type == 'macro']
 
-# Ensure all variables in descriptive_statistics are categorized
-descriptive_statistics_bank = descriptive_statistics.loc[descriptive_statistics.index.intersection(bank_vars)]
-descriptive_statistics_macro = descriptive_statistics.loc[descriptive_statistics.index.intersection(macro_vars)]
+# --- Bank-specific variables ---
+# The original method is correct for bank-specific variables as they vary by bank and time.
+bank_vars_in_data = [v for v in bank_vars if v in reg_data.final_data.columns]
+temp_bank = reg_data.final_data[bank_vars_in_data].stack().rename_axis(index=['id', 'date', 'variable']).rename('value')
+temp_bank_df = pd.DataFrame(temp_bank.astype(float))
+descriptive_statistics_bank = temp_bank_df.dropna().groupby('variable').describe()
+
+# --- Macroeconomic variables ---
+# For macro variables, they are constant across banks at any given time.
+# To get correct descriptive stats for the time series, we first average them by date.
+macro_vars_in_data = [v for v in macro_vars if v in reg_data.final_data.columns]
+macro_ts_df = reg_data.final_data[macro_vars_in_data].groupby('date').mean()
+
+# Now calculate descriptive statistics on the resulting time-series DataFrame.
+# We stack it to get a similar structure for groupby as the bank variables.
+temp_macro = macro_ts_df.stack().rename_axis(index=['date', 'variable']).rename('value')
+temp_macro_df = pd.DataFrame(temp_macro.astype(float))
+descriptive_statistics_macro = temp_macro_df.dropna().groupby('variable').describe()
+
+print("\n--- Latex ---")
 
 # Create 'tex' directory if it doesn't exist
 tex_dir = 'tex'
@@ -243,7 +254,7 @@ plt_bank_vars.show()
 import datetime
 now = datetime.datetime.now()
 timestamp = now.strftime("%Y%m%d_%H%M")
-fig_bank_vars.savefig(f"plots/bank_variables_{timestamp}.png", bbox_inches='tight')
+fig_bank_vars.savefig(f"plots/bank_variables.png", bbox_inches='tight')
 
 # Plot Macroeconomic Variables
 fig_macro_vars, plt_macro_vars = generate_plot(df_final, macro_vars_set, bank_vars_set, macro_vars_set)
@@ -252,7 +263,7 @@ plt_macro_vars.show()
 # Save the figure with date and time in front of the filename in the format YYYYMMDD_HHMM
 now = datetime.datetime.now() # Re-get current time to ensure unique timestamp if plots are fast
 timestamp = now.strftime("%Y%m%d_%H%M")
-fig_macro_vars.savefig(f"plots/macro_variables_{timestamp}.png", bbox_inches='tight')
+fig_macro_vars.savefig(f"plots/macro_variables.png", bbox_inches='tight')
 
 # Clear the figures to prevent them from being displayed again if the script is run in an interactive environment
 plt.close(fig_bank_vars)

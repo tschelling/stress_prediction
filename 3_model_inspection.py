@@ -8,6 +8,14 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from publication_name_mapping import PUBLICATION_NAMES
 
+def _add_latex_line_breaks_for_headers(latex_string: str) -> str:
+    """Replaces ' / ' in headers with a LaTeX line break using makecell."""
+    for name in PUBLICATION_NAMES.values():
+        if ' / ' in name:
+            new_name = name.replace(' / ', r' \\ / ')
+            latex_string = latex_string.replace(name, f'\\makecell{{{new_name}}}')
+    return latex_string
+
 # --- Configuration ---
 ARTIFACTS_DIRS = ["models_and_results_standard", "models_and_results_rfe"]
 
@@ -223,20 +231,48 @@ horizon_1_data['BaseModel'] = horizon_1_data['Model'].str.replace('_RFE', '', re
 # --- Number of Features Table ---
 print("\n\n--- Table: Number of Features Used by Model ---")
 features_pivot = horizon_1_data.pivot_table(
-    index='BaseModel',
-    columns=['Target', 'RunType'],
+    index=['BaseModel', 'RunType'],
+    columns='Target',
     values='NumFeatures'
 )
 features_pivot = features_pivot.fillna('-') # For clarity
 with pd.option_context('display.max_rows', None, 'display.max_columns', None, 'display.width', 200):
     print(features_pivot)
 
+# Save to LaTeX
+output_dir = "plots"
+os.makedirs(output_dir, exist_ok=True)
+features_pivot_latex = features_pivot.to_latex(
+    caption='Number of Features Used by Model (Horizon 1)',
+    label='tab:num_features',
+    longtable=True,
+    escape=True,
+    float_format="%.0f"
+)
+features_pivot_latex = _add_latex_line_breaks_for_headers(features_pivot_latex)
+features_table_path = os.path.join(output_dir, "num_features_table.tex")
+with open(features_table_path, "w") as f:
+    f.write(features_pivot_latex)
+print(f"Saved number of features table to {features_table_path}")
+
 
 # --- Hyperparameters Table ---
 print("\n\n--- Table: Hyperparameters by Model ---")
 
+import re
+
+def _format_hyperparams_str(s: str) -> str:
+    """Formats np.float64 values in a string representation of a dict."""
+    def repl(match):
+        try:
+            val = float(match.group(1))
+            return f"{val:.4g}"  # Use 4 significant figures for readability
+        except (ValueError, IndexError):
+            return match.group(0)  # Return original if conversion fails
+    return re.sub(r"np\.float64\((.*?)\)", repl, s)
+
 # Convert the dictionary of hyperparameters to a string for display
-horizon_1_data['Hyperparameters_str'] = horizon_1_data['Hyperparameters'].astype(str)
+horizon_1_data['Hyperparameters_str'] = horizon_1_data['Hyperparameters'].astype(str).apply(_format_hyperparams_str)
 
 hyperparams_pivot = horizon_1_data.pivot_table(
     index='Target',
@@ -249,6 +285,20 @@ hyperparams_pivot = hyperparams_pivot.fillna('N/A')
 # Display the full table without truncation
 with pd.option_context('display.max_rows', None, 'display.max_columns', None, 'display.width', 1000):
     print(hyperparams_pivot)
+
+# Save to LaTeX
+hyperparams_pivot_latex = hyperparams_pivot.to_latex(
+    caption='Hyperparameters by Model (Horizon 1)',
+    label='tab:hyperparams',
+    longtable=True,
+    escape=True
+)
+hyperparams_pivot_latex = _add_latex_line_breaks_for_headers(hyperparams_pivot_latex)
+hyperparams_table_path = os.path.join(output_dir, "hyperparameters_table.tex")
+with open(hyperparams_table_path, "w") as f:
+    f.write(hyperparams_pivot_latex)
+print(f"Saved hyperparameters table to {hyperparams_table_path}")
+
 
 # --- Create Faceted Bar Chart ---
 print("\n--- Generating Performance Chart ---")
@@ -356,7 +406,6 @@ for target_name in unique_targets:
         figsize=(14, 5 * len(available_models)), 
         squeeze=False
     )
-    fig.suptitle(f"Feature Importance for: {target_name} (Horizon {HORIZON_TO_PLOT})", fontsize=16)
 
     for i, base_model_name in enumerate(available_models):
         # --- Standard Model (Left) ---

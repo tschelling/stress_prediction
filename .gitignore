@@ -6,6 +6,8 @@
 *.xlsx
 *.pdf
 *.pyc
+*.tex
 /.vscode
 /models_and_results*
 /venv_cas
+/plots*
