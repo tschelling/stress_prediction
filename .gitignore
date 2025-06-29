@@ -5,7 +5,7 @@
 *.csv
 *.xlsx
 *.pdf
-!Final_Project_Tan_Schelling.pdf*
+!Final_Project_Report_Tan_Schelling.pdf*
 *.pyc
 *.tex
 /.vscode
