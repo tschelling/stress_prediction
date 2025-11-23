@@ -1,3 +1,35 @@
+"""
+Script Overview
+
+This script automates the processing of FFIEC data archives. It performs the following operations:
+- Scans the `zip/` directory for all `.zip` files.
+- Iterates through each `.zip` archive and processes all contained `.txt` files.
+- Reads metadata (variable codes, descriptions) from the header rows of each text file.
+- Reads main data, cleans column names, and handles encoding (UTF-8, latin1) or type errors.
+- Standardizes the 'IDRSSD' column, handles duplicates, and sets it as the DataFrame index.
+- Detects split files (e.g., "File (1 of 3).txt") using regex and concatenates them horizontally.
+- Merges all processed DataFrames (standalone, combined, or orphan parts) from a single zip file using an outer join on the 'IDRSSD' index.
+- Saves the final merged DataFrame for each input zip file as a separate `.parquet` file in the `parquet/` directory.
+- Generates three CSV logs upon completion: `import_debug_log.csv` (file-level processing metrics), `code_metadata_mapping.csv` (aggregated variable code-to-description map), and `txt_import_shapes.csv` (raw dimensions of imported text files).
+
+Execution and Configuration
+
+To execute the script, the following setup is required:
+
+1.  Directory Structure:
+    - The script requires a subdirectory named `zip/` in its root directory.
+    - All FFIEC `.zip` archives must be placed inside this `zip/` directory.
+    - The script will automatically create a `parquet/` directory in the root for all output files.
+
+2.  Dependencies:
+    - `pandas`
+    - `numpy`
+    - `pyarrow` or `fastparquet` (The script attempts `pyarrow` first, then `fastparquet` for Parquet writing).
+
+3.  Configuration:
+    - `DO_DEBUG`: This global variable at the top of the script is set to `False` by default. If set to `True`, the script will only process the first 10 `.zip` files found.
+"""
+
 # --- Imports ---
 import pandas as pd
 import numpy as np
