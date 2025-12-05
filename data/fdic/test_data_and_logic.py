@@ -6,6 +6,7 @@ from typing import Dict, Any, List, Callable
 
 # Import functions from your script (assuming script is named fdic_etl.py)
 # If the script is in the same directory, this import works.
+# Run pytest data/fdic/test_data_and_logic.py
 from prepare_fdic_refactored import (
     adjust_quarterly_flows, 
     consolidate_rcon_rcfd, 

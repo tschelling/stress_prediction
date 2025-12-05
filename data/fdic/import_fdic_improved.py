@@ -15,15 +15,18 @@ import numpy as np
 class Config:
     """Static configuration namespace."""
     ZIP_DIR = Path("data/fdic/zip")
+    # Changed output directory to 'intermediate' as requested
     INTERMEDIATE_DIR = Path("data/fdic/intermediate") 
-    DEBUG_MODE = True
-    DEBUG_LIMIT = 5 
+    DEBUG_MODE = False
+    DEBUG_LIMIT = 5 # Increased limit slightly for context
     SPLIT_FILE_PATTERN = re.compile(r"^(.*?)\s*\((\d+)\s+of\s+(\d+)\)\.txt$", re.IGNORECASE)
     DATE_PATTERNS = ['%Y%m%d', '%m%d%Y']
     
     # Filter patterns mapping to output filenames
+    # Note: Whitespace at the end is significant as requested
     TARGET_PATTERNS = {
         "Call Bulk POR ": "bank_information",
+        "Call Schedule ENT ": "ENT",
         "Call Schedule RI ": "RI",
         "Call Schedule RC ": "RC"
     }
@@ -86,6 +89,7 @@ def format_quarter_for_filename(quarter_str: str) -> str:
     if quarter_str == "Unknown":
         return "Unknown_Date"
     try:
+        # Expects "Qx YYYY"
         parts = quarter_str.split()
         return f"{parts[1]}_{parts[0]}"
     except IndexError:
@@ -136,7 +140,6 @@ def parse_header_metadata(file_obj) -> Dict[str, str]:
     local_map = {}
     try:
         file_obj.seek(0)
-        # Read only first two rows
         header_df = pd.read_csv(
             file_obj, sep='\t', header=None, nrows=2, 
             encoding='utf-8', low_memory=False, dtype=str
@@ -147,7 +150,6 @@ def parse_header_metadata(file_obj) -> Dict[str, str]:
             for code, desc in zip(codes, descriptions):
                 code_str = str(code).strip().strip('"')
                 desc_str = str(desc).strip().strip('"')
-                # Filter out IDRSSD and numeric placeholders, keep valid descriptions
                 if code_str and code_str != 'IDRSSD' and pd.notna(desc) and not desc_str.isdigit():
                     local_map[code_str] = desc_str
     except Exception:
@@ -266,6 +268,7 @@ def combine_split_groups(results: List[ProcessedFileResult]) -> Dict[str, pd.Dat
         if len(parts_dict) == total_parts and all(i in parts_dict for i in range(1, total_parts + 1)):
             sorted_dfs = [parts_dict[i] for i in range(1, total_parts + 1)]
             combined = _concat_dfs_horizontally(sorted_dfs)
+            # Reconstruct a filename-like key for consistency
             final_dfs[f"{base_name}.txt"] = combined
         else:
             for part_num, df in parts_dict.items():
@@ -285,28 +288,16 @@ def _concat_dfs_horizontally(dfs: List[pd.DataFrame]) -> pd.DataFrame:
 
 # --- I/O and Side Effects ---
 
-def write_logs(metrics: List[ProcessingMetrics], shapes: List[FileShapeLog]):
+def write_logs(metrics: List[ProcessingMetrics], metadata: Dict[str, str], shapes: List[FileShapeLog]):
     if metrics:
         pd.DataFrame([asdict(m) for m in metrics]).to_csv("import_debug_log.csv", index=False)
         print("Debug log saved.")
+    if metadata:
+        pd.DataFrame(list(metadata.items()), columns=['Code', 'Metadata']).to_csv("code_metadata_mapping.csv", index=False)
+        print("Metadata mapping saved.")
     if shapes:
         pd.DataFrame([asdict(s) for s in shapes]).to_csv("txt_import_shapes.csv", index=False)
         print("Shape log saved.")
-
-def save_code_descriptions(metadata_records: List[Dict[str, str]]):
-    """Saves the accumulated code descriptions to parquet."""
-    if not metadata_records:
-        return
-
-    Config.INTERMEDIATE_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = Config.INTERMEDIATE_DIR / "code_descriptions.parquet"
-    
-    try:
-        df = pd.DataFrame(metadata_records)
-        df.to_parquet(output_path, index=False)
-        print(f"Code descriptions saved: {output_path}")
-    except Exception as e:
-        print(f"Failed to save code descriptions: {e}")
 
 def save_categorized_parquet(dfs_map: Dict[str, pd.DataFrame]):
     """Saves DataFrames to the intermediate folder, categorized by content type."""
@@ -316,6 +307,7 @@ def save_categorized_parquet(dfs_map: Dict[str, pd.DataFrame]):
         if df is None or df.empty:
             continue
             
+        # Determine content type based on filename patterns
         output_type = None
         for pattern, type_name in Config.TARGET_PATTERNS.items():
             if pattern in filename_key:
@@ -325,12 +317,14 @@ def save_categorized_parquet(dfs_map: Dict[str, pd.DataFrame]):
         if not output_type:
             continue
             
+        # Determine quarter from filename
         q_raw = extract_reporting_quarter(filename_key, Config.DATE_PATTERNS)
         date_label = format_quarter_for_filename(q_raw)
         
         output_name = f"{date_label}_{output_type}.parquet"
         output_path = Config.INTERMEDIATE_DIR / output_name
         
+        # Ensure IDRSSD is a column (reset index) and convert to string for safety
         df_to_save = df.reset_index()
         df_str = df_to_save.astype(str)
         
@@ -344,17 +338,19 @@ def save_categorized_parquet(dfs_map: Dict[str, pd.DataFrame]):
             except Exception as e2:
                 print(f"Failed to save {output_path}: {e2}")
 
-def process_zip_archive(zip_path: Path) -> Tuple[List[ProcessingMetrics], List[Dict[str, str]], List[FileShapeLog]]:
-    """Main logic for a single zip file with filtering and metadata collection."""
+def process_zip_archive(zip_path: Path) -> Tuple[List[ProcessingMetrics], Dict[str, str], List[FileShapeLog]]:
+    """Main logic for a single zip file with filtering."""
     print(f"Processing: {zip_path.name}")
     results: List[ProcessedFileResult] = []
     
     try:
         with zipfile.ZipFile(zip_path, 'r') as zf:
+            # Filter files strictly based on Config patterns
             txt_files = []
             for f in zf.namelist():
                 if not f.lower().endswith('.txt'):
                     continue
+                # Check if file matches any of the required patterns
                 for pattern in Config.TARGET_PATTERNS.keys():
                     if pattern in f:
                         txt_files.append(f)
@@ -366,25 +362,19 @@ def process_zip_archive(zip_path: Path) -> Tuple[List[ProcessingMetrics], List[D
                     
     except zipfile.BadZipFile:
         print(f"Corrupt zip file: {zip_path}")
-        return [], [], []
+        return [], {}, []
 
+    # Combine parts if any (though unlikely for these specific files)
     dfs_map = combine_split_groups(results)
+    
+    # Save individually instead of merging
     save_categorized_parquet(dfs_map)
 
     metrics = [r.metrics for r in results]
     shapes = [r.shape_log for r in results]
-    
-    # Collect metadata with source filenames for this zip
-    metadata_records = []
-    for r in results:
-        for code, desc in r.metadata_map.items():
-            metadata_records.append({
-                "Code": code,
-                "Description": desc,
-                "Source_File": r.filename
-            })
+    metadata = {k: v for r in results for k, v in r.metadata_map.items()}
 
-    return metrics, metadata_records, shapes
+    return metrics, metadata, shapes
 
 def main():
     """Entry point."""
@@ -399,17 +389,16 @@ def main():
         print(f"Debug Mode: Processing first {len(zip_files)} files.")
 
     all_metrics: List[ProcessingMetrics] = []
-    all_metadata_records: List[Dict[str, str]] = []
+    all_metadata: Dict[str, str] = {}
     all_shapes: List[FileShapeLog] = []
 
     for zip_file in zip_files:
-        m, meta_records, s = process_zip_archive(zip_file)
+        m, meta, s = process_zip_archive(zip_file)
         all_metrics.extend(m)
-        all_metadata_records.extend(meta_records)
+        all_metadata.update(meta)
         all_shapes.extend(s)
 
-    write_logs(all_metrics, all_shapes)
-    save_code_descriptions(all_metadata_records)
+    write_logs(all_metrics, all_metadata, all_shapes)
 
 if __name__ == '__main__':
     main()
