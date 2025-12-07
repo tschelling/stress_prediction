@@ -57,6 +57,7 @@ def test_parquet_output():
             # Output row
             print(f"{p_file.name:<40} | {num_banks:>8} | {num_fields:>8} | {num_missing:>15} | {num_present:>15}")
 
+
         except Exception as e:
             print(f"Error processing {p_file.name}: {e}")
 

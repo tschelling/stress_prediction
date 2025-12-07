@@ -1,0 +1,20 @@
+import pandas as pd
+from aggregation import aggregate_yearly, aggregate_rolling_4q
+from data.fdic.prepare_fdic_refactored import FDICTaxonomy
+
+
+print("--- Loading Data ---")
+fred = pd.read_parquet('data/fred/macro_data_processed.parquet')
+fdic = pd.read_parquet('data/fdic/data_processed.parquet')
+yahoo = pd.read_parquet('data/yahoo/yahoo.parquet')
+print("Data loaded.")
+
+taxonomy = FDICTaxonomy()
+
+fdic_yearly = aggregate_yearly(fdic, taxonomy)
+fdic_rolling_4q = aggregate_rolling_4q(fdic, taxonomy)
+
+fdic.columns
+
+print("Done.")
+

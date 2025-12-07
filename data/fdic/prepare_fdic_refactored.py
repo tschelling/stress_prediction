@@ -1,3 +1,4 @@
+from heapq import merge
 import os
 import gc
 import glob
@@ -23,6 +24,7 @@ class FDICConfig:
     input_dir: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'intermediate')
     failed_bank_file: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'failed_bank_list.csv')
     adjust_flows: bool = True
+    # Indicates
     match_threshold: int = 85
     
     @property
@@ -213,6 +215,11 @@ def load_and_merge_quarterly_data(config: FDICConfig, desired_codes: Set[str]) -
     full_df = full_df.loc[:, ~full_df.columns.duplicated()]
     return full_df
 
+def change_dtypes(df: pd.DataFrame) -> pd.DataFrame:
+    print("Changing data types...")
+    df_out = df.copy()
+    df_out['cert_id'] = pd.to_numeric(df_out['cert_id'], errors='coerce').astype('Int64')
+    return df_out
 
 def save_dataframe(df: pd.DataFrame, path: str) -> None:
     if df.empty:
@@ -303,52 +310,51 @@ def filter_and_deduplicate(df: pd.DataFrame) -> pd.DataFrame:
     df_clean = df[pd.to_numeric(df['id'], errors='coerce').notna()].copy()
     return df_clean.drop_duplicates(subset=['id', 'date'], keep='first')
 
+def add_information(df:pd.DataFrame) -> pd.DataFrame:
+    df_out = df.copy()
+    if 'date' in df_out.columns:
+        df_out['quarter'] = df_out['date'].dt.to_period('Q')
+    return df_out
 
 def enrich_with_failures(df: pd.DataFrame, config: FDICConfig) -> pd.DataFrame:
+    
+    # Read failed bank list an prepare for merging
     if not os.path.exists(config.failed_bank_file):
         print("Failed bank list not found. Skipping enrichment.")
         return df
 
     fb = pd.read_csv(config.failed_bank_file, parse_dates=['FAILDATE'])
     fb = fb.rename(columns={
-        'FAILDATE': 'date', 'CERT': 'cert_id', 'NAME': 'bank_name', 
-        "COST": 'cost', "RESTYPE": "fail_type", 
-        "QBFASSET": "total_assets_failure", "QBFDEP": "total_deposits_failure"
+        'FAILDATE': 'fail_date', 'CERT': 'cert_id', 'NAME': 'failed_bank_name', 
+        "COST": 'failure_cost', "RESTYPE": "fail_type", 
+        "QBFASSET": "failure_total_assets", "QBFDEP": "failure_total_deposits"
     })
+    fb['quarter'] = fb['fail_date'].dt.to_period('Q') - 1
+    # Set quarter to 1 quarter before failure to align with last reporting quarter
+    fb = fb[['quarter', 'cert_id', 'failed_bank_name', 'failure_cost', 'failure_total_assets', 'failure_total_deposits', 'fail_type']]
+    fb[['fails_next_quarter']] = 1
     
-    if 'bank_name' not in df.columns:
-        return df
+    df['cert_id'] = pd.to_numeric(df['cert_id'], errors='coerce').astype('Int64')
+    
+    fb_unique_banks = fb['cert_id'].dropna().unique()
+    df_unique_banks = df['cert_id'].dropna().unique()
 
-    unique_banks = df['bank_name'].dropna().unique()
+    merged_banks = pd.merge(
+        pd.DataFrame({'cert_id': fb_unique_banks}), 
+        pd.DataFrame({'cert_id': df_unique_banks}), 
+        on='cert_id', how='right', indicator=True
+    )
 
-    def get_match(name):
-        match = process.extractOne(
-            name, unique_banks, scorer=fuzz.token_sort_ratio, 
-            processor=utils.default_process, score_cutoff=config.match_threshold
-        )
-        return (match[0], match[1]) if match else (None, None)
-
-    print("Performing fuzzy matching on failed banks...")
-    matches = fb['bank_name'].apply(get_match)
-    fb['matched_bank_name'] = matches.apply(lambda x: x[0])
-    fb_matched = fb.dropna(subset=['matched_bank_name'])
-    
-    df_merged = df.copy()
-    df_merged['date_period'] = pd.to_datetime(df_merged['date']).dt.to_period('Q')
-    fb_matched['date_period'] = fb_matched['date'].dt.to_period('Q')
-    
-    merge_cols = ['matched_bank_name', 'date_period', 'fail_type', 'total_assets_failure', 'total_deposits_failure']
-    fb_subset = fb_matched[merge_cols]
-    
     df_final = pd.merge(
-        df_merged, fb_subset, 
-        left_on=['bank_name', 'date_period'], 
-        right_on=['matched_bank_name', 'date_period'], 
+        df, fb, 
+        on=['quarter', 'cert_id'],  
         how='left'
     )
     
-    print(f"Matched {len(fb_matched)} out of {len(fb)} failed banks.")
-    return df_final.drop(columns=['matched_bank_name', 'date_period'])
+    # Print tabulated merged_banks info
+    print(merged_banks['_merge'].value_counts())
+
+    return df_final
 
 
 def calculate_custom_metrics(df: pd.DataFrame) -> pd.DataFrame:
@@ -430,6 +436,7 @@ def main():
 
     processed_df = (
         raw_df
+        .pipe(add_information)
         .pipe(consolidate_rcon_rcfd)
         .pipe(apply_renaming, mapping=taxonomy.all_mappings)
         .pipe(filter_and_deduplicate)
@@ -440,7 +447,11 @@ def main():
     if 'cert_id' in processed_df.columns:
         processed_df['cert_id'] = processed_df['cert_id'].astype(str)
 
+    # Set index to quarter and cert_id
+    processed_df.set_index(['cert_id', 'quarter'], inplace=True)
+
     save_dataframe(processed_df, config.processed_output_path)
+    print(f'Processed data saved to {config.processed_output_path}.')
     create_charts(processed_df, config)
     print("Processing complete.")
 
